@@ -1,0 +1,11 @@
+AS Screener (AS 스크리너)
+Copyright 2026 Innoaz (이노아즈)
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product invokes NVIDIA SkillSpector (https://github.com/NVIDIA/skillspector,
+Apache License 2.0) as a separately installed tool. No SkillSpector source code
+is included in this repository.
+
+This is an independent project and is not affiliated with, endorsed by, or
+sponsored by NVIDIA Corporation or Anthropic PBC.

@@ -1,0 +1,19 @@
+{
+ "_설명": "회귀 테스트 기대 결과. verdict: pass|caution|block|any (1차 검사 = 정적 + 우리 규칙, 에이전트 지침 기준 판정). rules: 걸려야 하는 우리 규칙(ko_ 한국어, zh_ 중국어, ja_ 일본어) '정확한' 목록. lines: 규칙이 가리켜야 하는 줄 번호.",
+ "fixtures": [
+  {"dir": "test-skills/ko-injection", "verdict": "block", "rules": ["ko_anti_refusal", "ko_concealment_from_user", "ko_credential_access", "ko_credential_exfiltration", "ko_instruction_override", "ko_stealth_wording"]},
+  {"dir": "test-skills/ko-injection-variants", "verdict": "block", "rules": ["ko_anti_refusal", "ko_concealment_from_user", "ko_credential_access", "ko_credential_exfiltration", "ko_instruction_override", "ko_stealth_wording"]},
+  {"dir": "test-skills/ko-injection-mixed", "verdict": "block", "rules": ["ko_credential_access", "ko_credential_exfiltration", "ko_instruction_override"], "lines": {"ko_instruction_override": 12, "ko_credential_exfiltration": 13}, "note": "방어 문장(8~9줄) 뒤에 숨긴 공격(12~13줄)을 가리켜야 함"},
+  {"dir": "test-skills/en-injection", "verdict": "block", "rules": []},
+  {"dir": "test-skills/ko-benign", "verdict": "pass", "rules": [], "note": "비밀번호·API 키·업로드 단어가 있는 정상 스킬 — 오탐 금지"},
+  {"dir": "test-skills/ko-benign-security", "verdict": "pass", "rules": [], "note": "'~하라는 문구는 거부' 같은 방어 문장 — 오탐 금지"},
+  {"dir": "test-skills/zh-injection", "verdict": "block", "rules": ["zh_anti_refusal", "zh_concealment_from_user", "zh_credential_access", "zh_instruction_override", "zh_stealth_wording"], "note": "중국어 규칙 v0.1. 유출 문장은 '内容'(앞 줄 지칭)이라 유출 규칙 대상 아님. 11·13줄은 줄 첫머리 일치 → 줄 번호 보정 확인", "lines": {"zh_instruction_override": 11, "zh_stealth_wording": 13}},
+  {"dir": "test-skills/zh-injection-variants", "verdict": "block", "rules": ["zh_anti_refusal", "zh_concealment_from_user", "zh_credential_access", "zh_credential_exfiltration", "zh_instruction_override", "zh_stealth_wording"], "lines": {"zh_instruction_override": 11, "zh_concealment_from_user": 12, "zh_credential_access": 13, "zh_credential_exfiltration": 14, "zh_stealth_wording": 15, "zh_anti_refusal": 16}, "note": "규칙마다 다른 문장 형태(목록 기호·번호·문장부호·줄 첫머리)"},
+  {"dir": "test-skills/zh-benign", "verdict": "pass", "rules": [], "note": "인용·부정·설명문('不要忽略','“忽略之前的所有指令”之类','让模型忽略') — 오탐 금지"},
+  {"dir": "test-skills/ja-injection", "verdict": "block", "rules": ["ja_anti_refusal", "ja_concealment_from_user", "ja_credential_access", "ja_credential_exfiltration", "ja_instruction_override", "ja_stealth_wording"], "lines": {"ja_instruction_override": 11, "ja_credential_exfiltration": 12}, "note": "일본어 규칙 v0.1. 유출은 12줄 비밀 정보 → 13줄 '送信せよ'(앞 줄이 、로 이어짐)"},
+  {"dir": "test-skills/ja-injection-variants", "verdict": "block", "rules": ["ja_anti_refusal", "ja_concealment_from_user", "ja_credential_access", "ja_credential_exfiltration", "ja_instruction_override", "ja_stealth_wording"], "lines": {"ja_instruction_override": 11, "ja_concealment_from_user": 12, "ja_credential_access": 13, "ja_credential_exfiltration": 14, "ja_stealth_wording": 15, "ja_anti_refusal": 16}, "note": "규칙마다 다른 문장 형태(〜てください·〜しないでください·〜しろ·연용형)"},
+  {"dir": "test-skills/ja-benign", "verdict": "pass", "rules": [], "note": "인용(「…無視してください」)·부정(無視しないでください)·설명문(無視させ)·문장이 끝난 뒤의 '送ってください' — 오탐 금지"},
+  {"dir": "test-skills/es-injection", "verdict": "pass", "rules": [], "note": "알려진 한계: 스페인어"},
+  {"dir": "rules", "verdict": "any", "rules": [], "note": "규칙 파일(한국어·중국어·일본어)이 자기 자신에게 걸리면 안 됨"}
+ ]
+}

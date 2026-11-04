@@ -1,0 +1,5 @@
+# 줄바꿈 통일: 저장소에는 LF. 윈도우 배치 파일만 CRLF (cmd가 LF를 잘못 읽음)
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
