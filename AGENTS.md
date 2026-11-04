@@ -13,6 +13,10 @@ AI 코딩 도구(Claude Code·Codex·Cursor 등)가 이 저장소에서 작업�
   - `rules/ko/ko_agent_skills.yar` — 한국어 (`ko_` 규칙)
   - `rules/zh/zh_agent_skills.yar` — 중국어 간체 (`zh_` 규칙)
   - `rules/ja/ja_agent_skills.yar` — 일본어 (`ja_` 규칙)
+  - 규칙 파일은 생성기 결과물이다. **`.yar`를 직접 고치지 말고** `tools/rulegen/<언어>_gen.py`를 고친 뒤 `python tools/rulegen/<언어>_gen.py`로 다시 만든다
+- `tools/rulegen/` — 규칙 생성기 (`common.py`: 바이트 표기·부정문/설명문 표지, `legacy_v01.py`: 중·일 v0.1 문자열)
+- `tools/measure_recall.py` — 탐지율 성적표 (`uv run --python 3.12 --with yara-python tools\measure_recall.py [heldout]`)
+- `eval/` — 평가 문장 (`practice.jsonl` 연습 세트, `heldout.jsonl` 시험 세트 — 악성 문장 포함)
 - `test-skills/` — 회귀 테스트용 시험 스킬 (일부는 일부러 넣은 악성 문장 — 절대 설치 금지)
 - `tests/` — 회귀 테스트 (`expected.json`이 기대 결과)
 - `LICENSE`·`NOTICE` — Apache-2.0, 출처 표기
@@ -26,6 +30,7 @@ AI 코딩 도구(Claude Code·Codex·Cursor 등)가 이 저장소에서 작업�
 - `테스트실행.bat` 더블클릭 (= `uv run --python 3.12 tests\run_regression.py`)
 - 전부 ✓ 이어야 한다. 기대 결과를 바꿔야 하면 `tests/expected.json`을 고치고 PR에 이유를 적는다.
 - 탐지 규칙을 고칠 때는 오탐 시험(공개 한국어·중국어·일본어 스킬 묶음)도 함께 돌린다: `uv run --python 3.12 tests\run_regression.py --corpus <폴더>`
+- 규칙을 고친 뒤 성적표도 돌린다. 연습 세트는 놓친 문장을 봐도 되지만(`-v`), **시험 세트(`eval/heldout.jsonl`)는 문장을 읽지 않고 점수만 본다.** 시험 세트를 보고 규칙을 고치면 점수가 부풀려진다.
 
 ## 배포
 - 배포 없음 (로컬 도구). PR 배포 상태는 항상 '배포 안 함'.
@@ -37,7 +42,7 @@ AI 코딩 도구(Claude Code·Codex·Cursor 등)가 이 저장소에서 작업�
 ## 주의
 - `test-skills/`의 악성 시험 파일은 지우거나 '고치지' 않는다. 탐지력 확인용이다.
 - 검사 대상 스킬의 코드는 실행하지 않는다. Claude 호출은 도구 없이, 원문은 데이터로만 넘긴다.
-- YARA 정규식은 바이트 단위다. 한글·한자·가나 뒤에 `?`를 바로 붙이지 말고 `(地)?`처럼 괄호로 묶는다. `[ ]` 안에 한글·한자·전각 부호를 넣지 않는다. 정규식 안의 `/`는 `\/`로 쓴다.
+- YARA 정규식은 바이트 단위다. 한글·한자·가나 뒤에 `?`를 바로 붙이지 말고 `(地)?`처럼 괄호로 묶는다 (생성기는 자동으로 묶는다). `[ ]` 안에 한글·한자·전각 부호를 넣지 않는다. 정규식 안의 `/`는 `\/`로 쓴다.
 - 우리 규칙은 '문장 첫머리에서 시키는 문장'만 잡는다(부정·인용·설명문 제외). 줄 첫머리 일치는 줄 번호가 1 작게 나오므로 `as_screener.fix_line`이 보정한다.
 - 설치 관리는 `AS_SCREENER.json` 표시가 있는 폴더만 덮어쓰기·제거한다. 사용자가 직접 만든 스킬은 건드리지 않는다.
 - 설치 관련 테스트는 `AS_SCREENER_HOME`(임시 폴더)으로만 돌린다. 실제 홈 폴더 스킬을 테스트에 쓰지 않는다.

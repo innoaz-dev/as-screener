@@ -1,8 +1,8 @@
 {
  "_설명": "회귀 테스트 기대 결과. verdict: pass|caution|block|any (1차 검사 = 정적 + 우리 규칙, 에이전트 지침 기준 판정). rules: 걸려야 하는 우리 규칙(ko_ 한국어, zh_ 중국어, ja_ 일본어) '정확한' 목록. lines: 규칙이 가리켜야 하는 줄 번호.",
  "fixtures": [
-  {"dir": "test-skills/ko-injection", "verdict": "block", "rules": ["ko_anti_refusal", "ko_concealment_from_user", "ko_credential_access", "ko_credential_exfiltration", "ko_instruction_override", "ko_stealth_wording"]},
-  {"dir": "test-skills/ko-injection-variants", "verdict": "block", "rules": ["ko_anti_refusal", "ko_concealment_from_user", "ko_credential_access", "ko_credential_exfiltration", "ko_instruction_override", "ko_stealth_wording"]},
+  {"dir": "test-skills/ko-injection", "verdict": "block", "rules": ["ko_anti_refusal", "ko_conceal_weak", "ko_concealment_from_user", "ko_credential_access", "ko_credential_exfiltration", "ko_instruction_override", "ko_stealth_wording"]},
+  {"dir": "test-skills/ko-injection-variants", "verdict": "block", "rules": ["ko_anti_refusal", "ko_conceal_weak", "ko_concealment_from_user", "ko_credential_access", "ko_credential_exfiltration", "ko_instruction_override", "ko_stealth_wording"]},
   {"dir": "test-skills/ko-injection-mixed", "verdict": "block", "rules": ["ko_credential_access", "ko_credential_exfiltration", "ko_instruction_override"], "lines": {"ko_instruction_override": 12, "ko_credential_exfiltration": 13}, "note": "방어 문장(8~9줄) 뒤에 숨긴 공격(12~13줄)을 가리켜야 함"},
   {"dir": "test-skills/en-injection", "verdict": "block", "rules": []},
   {"dir": "test-skills/ko-benign", "verdict": "pass", "rules": [], "note": "비밀번호·API 키·업로드 단어가 있는 정상 스킬 — 오탐 금지"},
