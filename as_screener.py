@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-AS 스크리너 - 붙여넣기 폼 시제품 v0.10.2 (2026-11-04)
+AS 스크리너 - 붙여넣기 폼 v1.0.0 (2026-11-05)
 
 사용법: AS스크리너.bat 더블클릭 (또는 `uv run --python 3.12 as_screener.py`)
 - 내 PC 안(127.0.0.1)에서만 열리는 검사 화면을 브라우저로 띄운다.
@@ -36,7 +36,7 @@ SESSIONS: dict = {}   # 검사 결과 → 재작성 단계로 넘길 정보
 REWRITES: dict = {}   # 재작성 결과 → 승인 단계로 넘길 정보
 _STORE_LOCK = threading.Lock()
 
-VERSION = "0.10.2"
+VERSION = "1.0.0"
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("AS_SCREENER_PORT", "8765"))
 BASE_DIR = Path(__file__).resolve().parent
@@ -788,7 +788,7 @@ td .prob{color:var(--block);font-size:12px;margin-top:3px}td .src{font:12px ui-m
 .msg{font-size:13px;margin-top:8px;white-space:pre-wrap}.msg.err{color:var(--block)}.msg.ok{color:var(--pass)}
 @media (max-width:640px){td.where-col,th.where-col{display:none}.verdict .score{margin-left:0;text-align:left}}
 </style></head><body><div class="wrap">
-<header><h1><b>AS</b> 스크리너</h1><span class="ver">에이전트·스킬 검사 · 시제품 v__VERSION__</span></header>
+<header><h1><b>AS</b> 스크리너</h1><span class="ver">에이전트·스킬 검사 · v__VERSION__</span></header>
 <div class="card">
 <textarea id="inp" placeholder="여기에 붙여넣기&#10;&#10;· 깃허브 주소   https://github.com/사용자/저장소/tree/main/skills/이름&#10;· 폴더 경로     D:\다운로드\some-skill&#10;· SKILL.md 본문 전체"></textarea>
 <div class="hint">스킬 코드는 실행하지 않고 읽기만 합니다. 깃허브는 저장소 전체보다 스킬 폴더 주소가 빠릅니다.</div>
