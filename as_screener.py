@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-AS 스크리너 - 붙여넣기 폼 v1.0.0 (2026-11-05)
+AS 스크리너 - 붙여넣기 폼 v1.0.1 (2026-11-10)
 
 사용법: AS스크리너.bat 더블클릭 (또는 `uv run --python 3.12 as_screener.py`)
 - 내 PC 안(127.0.0.1)에서만 열리는 검사 화면을 브라우저로 띄운다.
@@ -36,7 +36,7 @@ SESSIONS: dict = {}   # 검사 결과 → 재작성 단계로 넘길 정보
 REWRITES: dict = {}   # 재작성 결과 → 승인 단계로 넘길 정보
 _STORE_LOCK = threading.Lock()
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("AS_SCREENER_PORT", "8765"))
 BASE_DIR = Path(__file__).resolve().parent
