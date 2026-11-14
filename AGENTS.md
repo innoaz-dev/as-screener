@@ -13,6 +13,7 @@ AI 코딩 도구(Claude Code·Codex·Cursor 등)가 이 저장소에서 작업�
   - `rules/ko/ko_agent_skills.yar` — 한국어 (`ko_` 규칙)
   - `rules/zh/zh_agent_skills.yar` — 중국어 간체 (`zh_` 규칙)
   - `rules/ja/ja_agent_skills.yar` — 일본어 (`ja_` 규칙)
+  - `rules/en/en_concealment.yar` — 영어 은폐 패턴만 (`en_` 규칙). 영어 공격은 원래 SkillSpector 몫이고, 공개 스킬 검사에서 SkillSpector가 놓친 '숨겨서 실행·말하지 말라' 패턴만 예외로 둔다
   - 규칙 파일은 생성기 결과물이다. **`.yar`를 직접 고치지 말고** `tools/rulegen/<언어>_gen.py`를 고친 뒤 `python tools/rulegen/<언어>_gen.py`로 다시 만든다
 - `tools/rulegen/` — 규칙 생성기 (`common.py`: 바이트 표기·부정문/설명문 표지, `legacy_v01.py`: 중·일 v0.1 문자열)
 - `tools/measure_recall.py` — 탐지율 성적표 (`uv run --python 3.12 --with yara-python tools\measure_recall.py [heldout]`)
