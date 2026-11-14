@@ -108,11 +108,11 @@ def scan_many(paths: list[Path]) -> tuple[dict, str]:
 
 
 def our_hits(report: dict, src: Path | None = None) -> dict:
-    """우리 규칙(한국어 ko_·중국어 zh_·일본어 ja_) 이름 → 첫 줄 번호 (폼과 같은 줄 번호 보정 적용)"""
+    """우리 규칙(한국어 ko_·중국어 zh_·일본어 ja_·영어 은폐 en_) 이름 → 첫 줄 번호 (폼과 같은 줄 번호 보정 적용)"""
     hits = {}
     for it in report.get("issues", []):
         text = " ".join(str(it.get(k) or "") for k in ("explanation", "finding", "pattern", "message"))
-        m = re.search(r"YARA rule '((?:ko|zh|ja)_[a-z_]+)'", text)
+        m = re.search(r"YARA rule '((?:ko|zh|ja|en)_[a-z_]+)'", text)
         if m:
             loc = it.get("location") or {}
             line = scr.fix_line(str(src) if src else None, str(loc.get("file") or ""), loc.get("start_line"),

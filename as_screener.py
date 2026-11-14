@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-AS 스크리너 - 붙여넣기 폼 v1.0.1 (2026-11-10)
+AS 스크리너 - 붙여넣기 폼 v1.0.2 (2026-11-14)
 
 사용법: AS스크리너.bat 더블클릭 (또는 `uv run --python 3.12 as_screener.py`)
 - 내 PC 안(127.0.0.1)에서만 열리는 검사 화면을 브라우저로 띄운다.
@@ -36,11 +36,11 @@ SESSIONS: dict = {}   # 검사 결과 → 재작성 단계로 넘길 정보
 REWRITES: dict = {}   # 재작성 결과 → 승인 단계로 넘길 정보
 _STORE_LOCK = threading.Lock()
 
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("AS_SCREENER_PORT", "8765"))
 BASE_DIR = Path(__file__).resolve().parent
-RULES_DIR = BASE_DIR / "rules"   # 하위 폴더(ko, zh, ja)까지 SkillSpector가 모두 읽음
+RULES_DIR = BASE_DIR / "rules"   # 하위 폴더(ko, zh, ja, en)까지 SkillSpector가 모두 읽음
 TOKEN = secrets.token_urlsafe(24)  # 다른 웹사이트가 이 서버로 요청을 못 보내게 막는 1회용 열쇠
 SCAN_TIMEOUT = 1200
 MAX_PASTE_BYTES = 512 * 1024
@@ -73,8 +73,11 @@ KO_RULES = {
     "ja_instruction_override_weak": ("기존 지시 밀어내기 의심 (일본어)", "'이 문서만 따르라' 같이 기존 지시를 밀어내는 일본어 표현입니다. 내용을 확인하세요."),
     "ja_conceal_weak": ("사용자에게 알리지 말라는 의심 표현 (일본어)", "사용자에게 말하지 말라는 일본어 표현입니다. 정상적인 화면 안내일 수도 있으니 내용을 확인하세요."),
     "ja_secret_collection": ("비밀 정보 수집 의심 (일본어)", ".env·환경변수·토큰을 모으라는 일본어 표현입니다. 내용을 확인하세요."),
+    "en_conceal_silent_exec": ("숨겨서 실행 (영어)", "무언가를 조용히 실행하고 사용자에게 말하지 말라는 영어 지시입니다. 정상 스킬은 실행 사실을 숨길 이유가 없습니다."),
+    "en_conceal_silent_send": ("몰래 외부 전송 (영어)", "데이터를 조용히 외부 주소로 보내라는 영어 지시입니다. 설치하지 마세요."),
+    "en_conceal_without_telling": ("사용자 모르게 실행 의심 (영어)", "사용자에게 알리지 않고 실행·전송하라는 영어 표현입니다. 내용을 확인하세요."),
 }
-OUR_PREFIX = {"ko_": "한국어 규칙", "zh_": "중국어 규칙", "ja_": "일본어 규칙"}
+OUR_PREFIX = {"ko_": "한국어 규칙", "zh_": "중국어 규칙", "ja_": "일본어 규칙", "en_": "영어 은폐 규칙"}
 
 # SkillSpector 기본 규칙 ID 접두어 → 한국어 분류
 ID_PREFIX_KO = [
@@ -395,7 +398,7 @@ def normalize(report: dict, kind: str, llm: bool, stderr: str, fallback_name: st
         rid = str(it.get("id", ""))
         expl = str(it.get("explanation") or it.get("finding") or "")
         haystack = " ".join(str(it.get(k) or "") for k in ("explanation", "finding", "pattern", "message"))
-        m = re.search(r"YARA rule '([^']+)'", haystack) or re.search(r"\b((?:ko|zh|ja)_[a-z_]+)\b", haystack)
+        m = re.search(r"YARA rule '([^']+)'", haystack) or re.search(r"\b((?:ko|zh|ja|en)_[a-z_]+)\b", haystack)
         yrule = m.group(1) if m else ""
         ours = OUR_PREFIX.get(yrule[:3], "")
         if yrule in KO_RULES:
@@ -810,7 +813,7 @@ async function api(path,opt={}){opt.headers=Object.assign({"X-AS-Token":TOKEN,"C
  const r=await fetch(path,opt);return r.json();}
 async function pre(){try{const p=await api("/api/precheck");
  const pills=[[p.skillspector,p.skillspector?"SkillSpector "+p.skillspector_version:"SkillSpector 미설치"],
-  [p.rules,p.rules?"한국어·중국어·일본어 규칙 적용":"우리 규칙 없음"],
+  [p.rules,p.rules?"한국어·중국어·일본어 규칙 + 영어 은폐 규칙 적용":"우리 규칙 없음"],
   [p.claude&&p.claude_logged_in,p.claude_logged_in?"Claude 로그인됨 (LLM 가능)":(p.claude?"Claude 로그인 필요":"Claude Code 미설치")]];
  $("#status").innerHTML=pills.map(([ok,t])=>`<span class="pill ${ok?"ok":"no"}">${esc(t)}</span>`).join("");
  if(!(p.claude&&p.claude_logged_in)){$("#llm").disabled=true;$("#llmnote").textContent=p.claude_message+" (1차 검사는 그대로 가능)";}
@@ -833,7 +836,7 @@ function render(r){
  if(r.score!=null) h+=`<div class="score">원본 그대로 설치 시<br><b>${esc(r.score)}</b>/100</div>`;
  h+=`</div>`;
  const kind={url:"깃허브·웹 주소",path:"폴더 경로",text:"붙여넣은 본문"}[r.kind]||"";
- if(r.skill||kind) h+=`<div class="meta">${esc(r.skill?"스킬: "+r.skill+" · ":"")}${esc(kind)} · ${r.llm?"1차 + LLM 정밀검사":"1차 검사(정적 + 한국어·중국어·일본어 규칙)"}${r.coverage!=null?" · 검사 범위 "+esc(Math.round(r.coverage))+"%":""}</div>`;
+ if(r.skill||kind) h+=`<div class="meta">${esc(r.skill?"스킬: "+r.skill+" · ":"")}${esc(kind)} · ${r.llm?"1차 + LLM 정밀검사":"1차 검사(정적 + 한국어·중국어·일본어 규칙 + 영어 은폐 규칙)"}${r.coverage!=null?" · 검사 범위 "+esc(Math.round(r.coverage))+"%":""}</div>`;
  const instr=(r.issues||[]).filter(i=>i.group!=="code"), code=(r.issues||[]).filter(i=>i.group==="code");
  h+=timingLine(r.timing);
  if(r.state==="fail"&&!(r.issues&&r.issues.length)){$("#result").innerHTML=h;return;}
