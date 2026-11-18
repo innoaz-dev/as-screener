@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-AS 스크리너 - 붙여넣기 폼 v1.0.2 (2026-11-14)
+AS 스크리너 - 붙여넣기 폼 v1.0.3 (2026-11-18, 화면 기본 영어 · 한국어 선택)
 
 사용법: AS스크리너.bat 더블클릭 (또는 `uv run --python 3.12 as_screener.py`)
 - 내 PC 안(127.0.0.1)에서만 열리는 검사 화면을 브라우저로 띄운다.
@@ -24,6 +24,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -31,12 +32,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import as_rewriter as rw  # noqa: E402  같은 폴더의 재작성 엔진
 import as_installer as ins  # noqa: E402  설치 관리
+from as_i18n import BilingualError, norm, tr  # noqa: E402  화면 언어 (기본 영어, 한국어 선택)
 
 SESSIONS: dict = {}   # 검사 결과 → 재작성 단계로 넘길 정보
 REWRITES: dict = {}   # 재작성 결과 → 승인 단계로 넘길 정보
 _STORE_LOCK = threading.Lock()
 
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("AS_SCREENER_PORT", "8765"))
 BASE_DIR = Path(__file__).resolve().parent
@@ -78,6 +80,41 @@ KO_RULES = {
     "en_conceal_without_telling": ("사용자 모르게 실행 의심 (영어)", "사용자에게 알리지 않고 실행·전송하라는 영어 표현입니다. 내용을 확인하세요."),
 }
 OUR_PREFIX = {"ko_": "한국어 규칙", "zh_": "중국어 규칙", "ja_": "일본어 규칙", "en_": "영어 은폐 규칙"}
+# 영어 화면용 (v1.0.3부터 기본)
+EN_RULES = {
+    "ko_credential_exfiltration": ("Credential exfiltration", "Tells the agent to send SSH keys, passwords or tokens to an outside address. Do not install."),
+    "ko_instruction_override": ("Ignore previous instructions", "A sentence that makes the agent ignore its existing instructions or safety guidelines."),
+    "ko_concealment_from_user": ("Hide from the user", "Tells the agent not to tell the user. A legitimate skill has no reason to hide things from you."),
+    "ko_anti_refusal": ("Jailbreak phrase", "Safety-off wording such as 'there are no limits' or 'never refuse'."),
+    "ko_credential_access": ("Credential access", "Tells the agent to read sensitive files such as SSH keys, .env files or wallets."),
+    "ko_stealth_wording": ("Stealth execution", "Wording such as 'send it secretly' that asks for actions the user won't notice."),
+    "zh_credential_exfiltration": ("Credential exfiltration (Chinese)", "Chinese text that tells the agent to send SSH keys, passwords or tokens to an outside address. Do not install."),
+    "zh_instruction_override": ("Ignore previous instructions (Chinese)", "A Chinese sentence that makes the agent ignore its existing instructions or safety guidelines."),
+    "zh_concealment_from_user": ("Hide from the user (Chinese)", "Chinese text that tells the agent not to tell the user. A legitimate skill has no reason to hide things from you."),
+    "zh_anti_refusal": ("Jailbreak phrase (Chinese)", "Chinese safety-off wording such as 'there are no limits' or 'never refuse'."),
+    "zh_credential_access": ("Credential access (Chinese)", "Chinese text that tells the agent to read sensitive files such as SSH keys, .env files or wallets."),
+    "zh_stealth_wording": ("Stealth execution (Chinese)", "Chinese wording such as 'send it secretly' that asks for actions the user won't notice."),
+    "ja_credential_exfiltration": ("Credential exfiltration (Japanese)", "Japanese text that tells the agent to send SSH keys, passwords or tokens to an outside address. Do not install."),
+    "ja_instruction_override": ("Ignore previous instructions (Japanese)", "A Japanese sentence that makes the agent ignore its existing instructions or safety guidelines."),
+    "ja_concealment_from_user": ("Hide from the user (Japanese)", "Japanese text that tells the agent not to tell the user. A legitimate skill has no reason to hide things from you."),
+    "ja_anti_refusal": ("Jailbreak phrase (Japanese)", "Japanese safety-off wording such as 'there are no limits' or 'never refuse'."),
+    "ja_credential_access": ("Credential access (Japanese)", "Japanese text that tells the agent to read sensitive files such as SSH keys, .env files or wallets."),
+    "ja_stealth_wording": ("Stealth execution (Japanese)", "Japanese wording such as 'send it secretly' that asks for actions the user won't notice."),
+    "ko_instruction_override_weak": ("Possible instruction override", "Wording such as 'follow only this document' that pushes aside existing instructions. Review it."),
+    "ko_conceal_weak": ("Possible 'don't tell the user'", "Tells the agent not to mention something to the user. It may be ordinary UI guidance, so review it."),
+    "ko_secret_collection": ("Possible secret collection", "Wording that gathers .env files, environment variables or tokens. Review it."),
+    "zh_instruction_override_weak": ("Possible instruction override (Chinese)", "Chinese wording such as 'follow only this document' that pushes aside existing instructions. Review it."),
+    "zh_secret_collection": ("Possible secret collection (Chinese)", "Chinese wording that gathers .env files, environment variables or tokens. Review it."),
+    "ja_instruction_override_weak": ("Possible instruction override (Japanese)", "Japanese wording such as 'follow only this document' that pushes aside existing instructions. Review it."),
+    "ja_conceal_weak": ("Possible 'don't tell the user' (Japanese)", "Japanese text that tells the agent not to mention something to the user. It may be ordinary UI guidance, so review it."),
+    "ja_secret_collection": ("Possible secret collection (Japanese)", "Japanese wording that gathers .env files, environment variables or tokens. Review it."),
+    "en_conceal_silent_exec": ("Hidden execution", "Tells the agent to run something silently and not mention it to the user. A legitimate skill has no reason to hide what it runs."),
+    "en_conceal_silent_send": ("Silent outbound send", "Tells the agent to quietly send data to an outside endpoint. Do not install."),
+    "en_conceal_without_telling": ("Possible action without telling the user", "Wording that runs or sends something without telling the user. Review it."),
+}
+OUR_PREFIX_EN = {
+    "ko_": "Korean rule", "zh_": "Chinese rule", "ja_": "Japanese rule", "en_": "English concealment rule",
+}
 
 # SkillSpector 기본 규칙 ID 접두어 → 한국어 분류
 ID_PREFIX_KO = [
@@ -89,6 +126,15 @@ ID_PREFIX_KO = [
     ("OH", "출력 처리"), ("AS", "스킬 간 접근"), ("P", "프롬프트 인젝션"),
 ]
 SEV_KO = {"CRITICAL": "치명", "HIGH": "높음", "MEDIUM": "중간", "LOW": "낮음", "INFO": "참고"}
+ID_PREFIX_EN = [
+    ("SDI", "LLM: description doesn't match behavior"), ("SQP", "LLM: quality / policy issue"),
+    ("SSD", "LLM: security risk"), ("AR", "Jailbreak / refusal bypass"),
+    ("PE", "Privilege escalation / secret access"), ("DE", "Data exfiltration"), ("SC", "Supply-chain risk"),
+    ("EA", "Excessive agency"), ("TM", "Tool misuse"), ("MP", "Memory poisoning"), ("SP", "System prompt leak"),
+    ("RA", "Rogue agent"), ("TT", "Dangerous data flow"), ("TP", "Tool description poisoning (MCP)"),
+    ("MCP", "MCP permissions"), ("YR", "Malicious pattern (YARA)"), ("OH", "Output handling"),
+    ("AS", "Cross-skill access"), ("P", "Prompt injection"),
+]
 
 # SkillSpector 규칙 ID별 한국어 이름 (README 규칙표 기준)
 ID_KO = {
@@ -115,6 +161,32 @@ ID_KO = {
     "AS3": "다른 스킬 파일 열람",
     "TP1": "도구 설명 속 숨은 지시", "TP2": "유니코드 위장", "TP3": "인자 설명 주입", "TP4": "설명과 동작 불일치",
 }
+ID_EN = {
+    "P1": "Instruction override", "P2": "Hidden instructions", "P3": "Exfiltration command",
+    "P4": "Behavior manipulation", "P5": "Harmful content", "P6": "Direct information leak",
+    "P7": "Indirect information extraction", "P8": "Exfiltration via tools", "P9": "Whitespace hiding",
+    "AR1": "Refusal suppression", "AR2": "Warning suppression", "AR3": "Safety policy bypass",
+    "E1": "External transmission", "E2": "Environment variable harvesting", "E3": "File system enumeration",
+    "E4": "Context leakage", "PE1": "Excessive permissions", "PE2": "sudo execution", "PE3": "Credential access",
+    "SC1": "Unpinned dependency", "SC2": "Remote script download", "SC3": "Obfuscated code",
+    "SC4": "Vulnerable dependency", "SC5": "Abandoned dependency", "SC6": "Typosquatted package",
+    "SC8": "Compiled Python files included", "SC9": "Hidden executable", "SC10": "Dependency source changed",
+    "EA1": "Unrestricted tool use", "EA2": "Autonomous decisions", "EA3": "Scope expansion",
+    "EA4": "Unrestricted resource access", "EA5": "External model selection", "OH1": "Unvalidated output injection",
+    "OH2": "Cross-context output", "OH3": "Unbounded output", "MP1": "Persistent context injection",
+    "MP2": "Context stuffing", "MP3": "Memory manipulation", "TM1": "Tool argument abuse",
+    "TM2": "Tool chaining abuse", "TM3": "Unsafe defaults", "RA1": "Self-modification", "RA2": "Session persistence",
+    "TR1": "Overly broad trigger", "TR2": "Hidden command trigger", "TR3": "Keyword bait", "AST1": "exec() call",
+    "AST2": "eval() call", "AST3": "Dynamic import", "AST4": "External command (subprocess)",
+    "AST5": "os.system call", "AST6": "compile() call", "AST7": "Dynamic getattr",
+    "AST8": "Dangerous execution chain", "AST9": "Reflective getattr", "TT1": "Dangerous data flow",
+    "TT2": "Dangerous flow via variable", "TT3": "Credential leak chain", "TT4": "File read → outbound send",
+    "TT5": "External input → code execution", "YR1": "Malware pattern", "YR2": "Web shell pattern",
+    "YR3": "Crypto-miner pattern", "YR4": "Hacking tool pattern", "LP1": "Under-declared permissions",
+    "LP2": "Wildcard permissions", "LP3": "Undeclared permissions", "LP4": "Over-declared permissions",
+    "AS3": "Reads other skills' files", "TP1": "Hidden instructions in tool description", "TP2": "Unicode disguise",
+    "TP3": "Argument description injection", "TP4": "Description doesn't match behavior",
+}
 
 
 def clean_snippet(text: str) -> str:
@@ -125,13 +197,15 @@ def clean_snippet(text: str) -> str:
     return out[:240] + ("…" if len(out) > 240 else "")
 
 
-def ko_category(rule_id: str) -> str:
-    if rule_id.upper() in ID_KO:
-        return ID_KO[rule_id.upper()]
-    for prefix, label in ID_PREFIX_KO:
+def ko_category(rule_id: str, lang: str = "ko") -> str:
+    """규칙 ID → 사람이 읽는 분류 이름 (lang: ko | en)."""
+    names, prefixes = (ID_KO, ID_PREFIX_KO) if norm(lang) == "ko" else (ID_EN, ID_PREFIX_EN)
+    if rule_id.upper() in names:
+        return names[rule_id.upper()]
+    for prefix, label in prefixes:
         if rule_id.upper().startswith(prefix):
             return label
-    return "기타"
+    return tr(lang, "기타", "Other")
 
 
 # ── 사전 점검 ────────────────────────────────────────────────────────────────
@@ -147,20 +221,24 @@ _PRECHECK_LOCK = threading.Lock()
 PRECHECK_TTL = 60  # 초. 새로고침마다 claude 상태를 다시 묻지 않도록
 
 
-def precheck() -> dict:
-    """상태 확인 결과를 60초간 기억. 동시에 여러 번 불려도 한 번만 실제 확인."""
-    import time
+def precheck(lang: str = "en") -> dict:
+    """상태 확인 결과를 60초간 기억. 동시에 여러 번 불려도 한 번만 실제 확인. 안내 문구는 화면 언어로."""
     with _PRECHECK_LOCK:
-        if _PRECHECK_CACHE["value"] is not None and time.time() - _PRECHECK_CACHE["at"] < PRECHECK_TTL:
-            return _PRECHECK_CACHE["value"]
-        value = _precheck_uncached()
-        _PRECHECK_CACHE.update(at=time.time(), value=value)
-        return value
+        if _PRECHECK_CACHE["value"] is None or time.time() - _PRECHECK_CACHE["at"] >= PRECHECK_TTL:
+            _PRECHECK_CACHE.update(at=time.time(), value=_precheck_uncached())
+        value = dict(_PRECHECK_CACHE["value"])
+    issue = value.pop("claude_issue", "")
+    value["claude_message"] = {
+        "not_installed": tr(lang, "Claude Code가 설치되어 있지 않습니다.", "Claude Code is not installed."),
+        "login": tr(lang, "Claude Code 로그인이 필요합니다. 터미널에서 `claude auth login`을 실행하세요.",
+                    "Log in to Claude Code first: run `claude auth login` in a terminal."),
+    }.get(issue, "")
+    return value
 
 
 def _precheck_uncached() -> dict:
     result = {"skillspector": False, "skillspector_version": "", "rules": RULES_DIR.is_dir(),
-              "claude": False, "claude_logged_in": False, "claude_message": ""}
+              "claude": False, "claude_logged_in": False, "claude_issue": ""}
     ss = shutil.which("skillspector")
     if ss:
         cp = _run_quick([ss, "--version"])
@@ -170,7 +248,7 @@ def _precheck_uncached() -> dict:
                                                    cp.stdout.decode("utf-8", "replace").strip())
     cl = shutil.which("claude")
     if not cl:
-        result["claude_message"] = "Claude Code가 설치되어 있지 않습니다."
+        result["claude_issue"] = "not_installed"
     else:
         result["claude"] = True
         cp = _run_quick([cl, "auth", "status"])
@@ -180,11 +258,15 @@ def _precheck_uncached() -> dict:
         except (ValueError, AttributeError):
             result["claude_logged_in"] = False
         if not result["claude_logged_in"]:
-            result["claude_message"] = "Claude Code 로그인이 필요합니다. 터미널에서 `claude auth login`을 실행하세요."
+            result["claude_issue"] = "login"
     return result
 
 
 # ── 입력 판별 ────────────────────────────────────────────────────────────────
+class InputError(BilingualError, ValueError):
+    """붙여넣은 입력 문제 (한국어·영어)."""
+
+
 def resolve_input(raw: str) -> tuple[str, str, str | None]:
     """(대상, 종류, 임시폴더) 반환. 종류: url | path | text"""
     text = raw.strip()
@@ -197,9 +279,10 @@ def resolve_input(raw: str) -> tuple[str, str, str | None]:
         if p.exists():
             return str(p.resolve()), "path", None
         if re.match(r"^[A-Za-z]:\\|^\\\\|^/|^~", candidate):
-            raise ValueError(f"경로를 찾을 수 없습니다: {candidate}")
+            raise InputError(f"경로를 찾을 수 없습니다: {candidate}", f"Path not found: {candidate}")
     if len(text.encode("utf-8")) > MAX_PASTE_BYTES:
-        raise ValueError("붙여넣은 본문이 너무 큽니다 (512KB 초과). 폴더 경로나 주소로 넣어주세요.")
+        raise InputError("붙여넣은 본문이 너무 큽니다 (512KB 초과). 폴더 경로나 주소로 넣어주세요.",
+                         "The pasted text is too large (over 512 KB). Paste a folder path or URL instead.")
     tmp = tempfile.mkdtemp(prefix="as_screener_")
     skill_dir = Path(tmp) / "pasted-skill"
     skill_dir.mkdir()
@@ -208,7 +291,7 @@ def resolve_input(raw: str) -> tuple[str, str, str | None]:
 
 
 # ── 검사 실행 ────────────────────────────────────────────────────────────────
-def _child_env(llm: bool) -> dict:
+def _child_env(llm: bool, lang: str = "en") -> dict:
     env = dict(os.environ)
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
@@ -216,7 +299,7 @@ def _child_env(llm: bool) -> dict:
     if llm:
         env["SKILLSPECTOR_PROVIDER"] = "claude_cli"
         env.setdefault("SKILLSPECTOR_MAX_LLM_CONCURRENCY", "2")
-        env["SKILLSPECTOR_OUTPUT_LANGUAGE"] = "Korean"  # LLM 발견 설명을 한국어로
+        env["SKILLSPECTOR_OUTPUT_LANGUAGE"] = tr(lang, "Korean", "English")  # LLM 발견 설명을 화면 언어로
     else:
         env.pop("SKILLSPECTOR_PROVIDER", None)
     return env
@@ -248,17 +331,20 @@ def _timing(t0: float, ss_sec: float) -> dict:
     return {"total": round(total, 1), "skillspector": round(ss_sec, 1), "ours": round(max(total - ss_sec, 0.0), 1)}
 
 
-def run_scan(raw: str, llm: bool) -> dict:
+def run_scan(raw: str, llm: bool, lang: str = "en") -> dict:
+    t = lambda ko, en: tr(lang, ko, en)  # noqa: E731
     t0 = time.perf_counter()
     ss_sec = 0.0
     ss = shutil.which("skillspector")
     if not ss:
-        return {"state": "fail", "title": "SkillSpector가 설치되어 있지 않습니다",
-                "detail": "터미널에서 설치 후 다시 시도하세요: uv tool install --python 3.12 git+https://github.com/NVIDIA/skillspector.git"}
+        return {"state": "fail", "title": t("SkillSpector가 설치되어 있지 않습니다", "SkillSpector is not installed"),
+                "detail": t("터미널에서 설치 후 다시 시도하세요: ", "Install it in a terminal and try again: ")
+                + "uv tool install --python 3.12 git+https://github.com/NVIDIA/skillspector.git"}
     try:
         target, kind, tmp = resolve_input(raw)
     except ValueError as exc:
-        return {"state": "fail", "title": "입력을 확인해 주세요", "detail": str(exc)}
+        return {"state": "fail", "title": t("입력을 확인해 주세요", "Check your input"),
+                "detail": exc.text(lang) if isinstance(exc, BilingualError) else str(exc)}
     argv = [ss, "scan", target, "--format", "json"]
     if RULES_DIR.is_dir():
         argv += ["--yara-rules-dir", str(RULES_DIR)]
@@ -266,12 +352,13 @@ def run_scan(raw: str, llm: bool) -> dict:
         argv.append("--no-llm")
     t_ss = time.perf_counter()
     try:
-        cp = run_tree(argv, SCAN_TIMEOUT, _child_env(llm))
+        cp = run_tree(argv, SCAN_TIMEOUT, _child_env(llm, lang))
     except subprocess.TimeoutExpired:
         if tmp:
             shutil.rmtree(tmp, ignore_errors=True)
-        return {"state": "fail", "title": "검사 시간 초과",
-                "detail": f"SkillSpector가 {SCAN_TIMEOUT // 60}분 안에 끝나지 않았습니다.",
+        return {"state": "fail", "title": t("검사 시간 초과", "Scan timed out"),
+                "detail": t(f"SkillSpector가 {SCAN_TIMEOUT // 60}분 안에 끝나지 않았습니다.",
+                            f"SkillSpector did not finish within {SCAN_TIMEOUT // 60} minutes."),
                 "timing": _timing(t0, time.perf_counter() - t_ss)}
     ss_sec = time.perf_counter() - t_ss
     try:
@@ -281,11 +368,12 @@ def run_scan(raw: str, llm: bool) -> dict:
             report = json.loads(stdout[stdout.index("{"):])
         except ValueError:
             tail = "\n".join(stderr.strip().splitlines()[-8:])
-            return {"state": "fail", "title": "검사 실패", "detail": tail or f"종료 코드 {cp.returncode}",
+            return {"state": "fail", "title": t("검사 실패", "Scan failed"),
+                    "detail": tail or t(f"종료 코드 {cp.returncode}", f"Exit code {cp.returncode}"),
                     "timing": _timing(t0, ss_sec)}
-        fallback = {"text": "붙여넣은 본문", "url": target.rstrip("/").split("/")[-1]}.get(kind, Path(target).name)
+        fallback = {"text": t("붙여넣은 본문", "Pasted text"), "url": target.rstrip("/").split("/")[-1]}.get(kind, Path(target).name)
         src_root = target if kind in ("path", "text") else None
-        result = normalize(report, kind, llm, stderr, fallback, src_root)
+        result = normalize(report, kind, llm, stderr, fallback, src_root, lang)
         if result["state"] != "fail":
             sid = secrets.token_urlsafe(12)
             with _STORE_LOCK:
@@ -383,7 +471,9 @@ SEV_RANK = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1, "INFO": 0}
 
 
 def normalize(report: dict, kind: str, llm: bool, stderr: str, fallback_name: str = "",
-              src_root: str | None = None) -> dict:
+              src_root: str | None = None, lang: str = "en") -> dict:
+    t = lambda ko, en: tr(lang, ko, en)  # noqa: E731
+    rules, prefixes = (KO_RULES, OUR_PREFIX) if norm(lang) == "ko" else (EN_RULES, OUR_PREFIX_EN)
     ra = report.get("risk_assessment", {})
     comp = report.get("analysis_completeness", {}) or {}
     rec = str(ra.get("recommendation", "CAUTION")).upper()
@@ -400,17 +490,17 @@ def normalize(report: dict, kind: str, llm: bool, stderr: str, fallback_name: st
         haystack = " ".join(str(it.get(k) or "") for k in ("explanation", "finding", "pattern", "message"))
         m = re.search(r"YARA rule '([^']+)'", haystack) or re.search(r"\b((?:ko|zh|ja|en)_[a-z_]+)\b", haystack)
         yrule = m.group(1) if m else ""
-        ours = OUR_PREFIX.get(yrule[:3], "")
-        if yrule in KO_RULES:
-            title, desc = KO_RULES[yrule]
+        ours = prefixes.get(yrule[:3], "")
+        if yrule in rules:
+            title, desc = rules[yrule]
             cat = ours
         elif ours:
-            km = re.search(r"\[(?:KO|ZH|JA)\]\s*([^\[]+)", haystack)
+            km = re.search(r"\[(?:KO|ZH|JA|EN)\]\s*([^\[]+)", haystack)
             title, desc, cat = ours, (km.group(1).strip() if km else yrule), ours
         else:
-            title, desc, cat = ko_category(rid), expl, ko_category(rid)
+            title, desc, cat = ko_category(rid, lang), expl, ko_category(rid, lang)
             if yrule:
-                title = f"악성 패턴 ({yrule})"
+                title = t(f"악성 패턴 ({yrule})", f"Malicious pattern ({yrule})")
         loc = it.get("location", {}) or {}
         line = loc.get("start_line")
         if ours:
@@ -432,33 +522,45 @@ def normalize(report: dict, kind: str, llm: bool, stderr: str, fallback_name: st
     code_max = max((SEV_RANK.get(i["severity"], 0) for i in code), default=-1)
     code_note = ""
     if code:
-        code_note = (f"코드·의존성 쪽 발견 {len(code)}건은 AS 스크리너가 가져오지 않는 파일이라 판정에서 뺐습니다."
-                     + (" 그중 치명 항목이 있어 원본을 그대로 설치하면 위험합니다." if code_max >= 4 else ""))
+        code_note = (t(f"코드·의존성 쪽 발견 {len(code)}건은 AS 스크리너가 가져오지 않는 파일이라 판정에서 뺐습니다.",
+                       f"{len(code)} finding(s) in code and dependency files were left out of the verdict, "
+                       "because AS Screener never brings those files in.")
+                     + (t(" 그중 치명 항목이 있어 원본을 그대로 설치하면 위험합니다.",
+                          " Some are critical, so installing the original as-is is dangerous.") if code_max >= 4 else ""))
     if failed:
-        state, title = "fail", "검사 실패 · 다시 시도 필요"
-        detail = ("LLM 정밀검사가 실행되지 않았습니다. Claude Code 로그인 상태를 확인하세요."
-                  if llm and degraded else "검사가 끝까지 수행되지 않았습니다. 아래 결과는 일부만 반영됐습니다.")
+        state, title = "fail", t("검사 실패 · 다시 시도 필요", "Scan failed · try again")
+        detail = (t("LLM 정밀검사가 실행되지 않았습니다. Claude Code 로그인 상태를 확인하세요.",
+                    "The LLM deep scan did not run. Check that Claude Code is logged in.")
+                  if llm and degraded else t("검사가 끝까지 수행되지 않았습니다. 아래 결과는 일부만 반영됐습니다.",
+                                             "The scan did not complete. The results below are partial."))
     elif instr_max >= 3:
-        state, title, detail = "block", "차단 · 설치하지 마세요", "에이전트 지침에서 위험한 지시가 발견됐습니다."
+        state, title = "block", t("차단 · 설치하지 마세요", "Blocked · do not install")
+        detail = t("에이전트 지침에서 위험한 지시가 발견됐습니다.", "Dangerous instructions were found in the agent instructions.")
     elif instr_max == 2 or code_max >= 4:
-        state, title = "caution", "주의 · 기본 차단"
-        detail = ("에이전트 지침에 확인이 필요한 항목이 있습니다. 내용을 보고 판단하세요."
-                  if instr_max == 2 else "지침은 깨끗하지만 원본 코드에 치명 항목이 있습니다. 지침만 새로 쓰는 방식으로 가져오세요.")
+        state, title = "caution", t("주의 · 기본 차단", "Caution · blocked by default")
+        detail = (t("에이전트 지침에 확인이 필요한 항목이 있습니다. 내용을 보고 판단하세요.",
+                    "Some items in the agent instructions need review. Read them and decide.")
+                  if instr_max == 2 else t("지침은 깨끗하지만 원본 코드에 치명 항목이 있습니다. 지침만 새로 쓰는 방식으로 가져오세요.",
+                                           "The instructions are clean, but the original code has critical findings. "
+                                           "Bring it in only as a rewrite of the instructions."))
     else:
-        state, title, detail = "pass", "통과 · 에이전트 지침 기준", "에이전트 지침에서 위험한 지시가 발견되지 않았습니다."
+        state, title = "pass", t("통과 · 에이전트 지침 기준", "Pass · based on the agent instructions")
+        detail = t("에이전트 지침에서 위험한 지시가 발견되지 않았습니다.", "No dangerous instructions were found in the agent instructions.")
     if state == "pass" and not llm:
-        detail += " 처음 보는 스킬이면 LLM 정밀검사도 권장합니다."
+        detail += t(" 처음 보는 스킬이면 LLM 정밀검사도 권장합니다.", " For a skill you haven't seen before, the LLM deep scan is recommended too.")
     return {"state": state, "title": title, "detail": detail, "score": ra.get("score"),
-            "skill": _skill_name(report, fallback_name), "kind": kind, "llm": llm,
+            "skill": _skill_name(report, fallback_name, lang), "kind": kind, "llm": llm,
             "coverage": coverage, "issues": issues, "code_note": code_note,
             "instr_count": len(instr), "code_count": len(code)}
 
 
-def _skill_name(report: dict, fallback: str) -> str:
+def _skill_name(report: dict, fallback: str, lang: str = "en") -> str:
     name = str((report.get("skill") or {}).get("name") or "")
     if name and name != "unknown":
         return name
-    return f"{fallback} (SKILL.md 없음 · 스킬 폴더가 아닐 수 있음)" if fallback else "알 수 없음"
+    if not fallback:
+        return tr(lang, "알 수 없음", "Unknown")
+    return fallback + tr(lang, " (SKILL.md 없음 · 스킬 폴더가 아닐 수 있음)", " (no SKILL.md · may not be a skill folder)")
 
 
 # ── 재작성 · 자동 검증 · 승인 ────────────────────────────────────────────────
@@ -466,19 +568,23 @@ JOBS: dict = {}
 MAX_ROUNDS = 2  # 자동 재작성 최대 횟수 (Claude 사용량 상한)
 
 
-def start_rewrite(scan_id: str, lang: str, feedback: str = "") -> dict:
+def start_rewrite(scan_id: str, lang: str, feedback: str = "", ui: str = "en") -> dict:
+    """lang = 새 스킬을 쓸 언어, ui = 화면 언어 (진행 단계·오류·검증 결과 문구)."""
+    ui = norm(ui)
     sess = SESSIONS.get(scan_id)
     if not sess:
-        return {"ok": False, "error": "검사 기록이 없습니다. 다시 검사한 뒤 재작성하세요."}
+        return {"ok": False, "error": tr(ui, "검사 기록이 없습니다. 다시 검사한 뒤 재작성하세요.",
+                                         "No scan record found. Scan again, then rewrite.")}
     if sess["state"] == "block":
-        return {"ok": False, "error": "차단된 스킬은 재작성하지 않습니다. 위험한 지시가 의도에 섞여 있을 수 있습니다."}
+        return {"ok": False, "error": tr(ui, "차단된 스킬은 재작성하지 않습니다. 위험한 지시가 의도에 섞여 있을 수 있습니다.",
+                                         "Blocked skills are not rewritten: the dangerous instructions may be mixed into the intent.")}
     jid = secrets.token_urlsafe(12)
-    job = {"status": "running", "step": "준비 중", "log": [], "result": None}
+    job = {"status": "running", "step": tr(ui, "준비 중", "Preparing"), "log": [], "result": None, "ui": ui}
     with _STORE_LOCK:
         JOBS[jid] = job
         while len(JOBS) > 20:
             JOBS.pop(next(iter(JOBS)))
-    threading.Thread(target=_rewrite_job, args=(job, sess, "en" if lang == "en" else "ko", feedback[:3000]),
+    threading.Thread(target=_rewrite_job, args=(job, sess, "en" if lang == "en" else "ko", feedback[:3000], ui),
                      daemon=True).start()
     return {"ok": True, "job_id": jid}
 
@@ -488,27 +594,28 @@ def _step(job: dict, text: str) -> None:
     job["log"].append(text)
 
 
-def _rescan_check(new_dir: Path, llm: bool) -> dict:
-    r = run_scan(str(new_dir), llm)
+def _rescan_check(new_dir: Path, llm: bool, ui: str = "en") -> dict:
+    r = run_scan(str(new_dir), llm, ui)
     with _STORE_LOCK:
         for k in [k for k, v in SESSIONS.items() if v.get("target") == str(new_dir)]:
             SESSIONS.pop(k, None)
-    name = "LLM 재검사" if llm else "정적 재검사"
+    name = tr(ui, "LLM 재검사", "LLM rescan") if llm else tr(ui, "정적 재검사", "Static rescan")
     st = r.get("state")
     instr = [i for i in r.get("issues", []) if i.get("group") != "code"]
     detail = r.get("title", "") + (" · " + "; ".join(f"{i['title']}({i['where']})" for i in instr[:4]) if instr else "")
     if st == "fail":
         status = "warn" if llm else "fail"
-        detail = "검사를 끝까지 못 함: " + r.get("detail", "")
+        detail = tr(ui, "검사를 끝까지 못 함: ", "Scan did not complete: ") + r.get("detail", "")
     else:
         status = {"pass": "pass", "caution": "warn", "block": "fail"}.get(st, "warn")
     return {"id": "llm" if llm else "static", "name": name, "status": status, "detail": detail}
 
 
-def _rewrite_job(job: dict, sess: dict, lang: str, first_feedback: str = "") -> None:
+def _rewrite_job(job: dict, sess: dict, lang: str, first_feedback: str = "", ui: str = "en") -> None:
+    t = lambda ko, en: tr(ui, ko, en)  # noqa: E731
     work = Path(tempfile.mkdtemp(prefix="as_rewrite_"))
     try:
-        _step(job, "원본 가져오는 중")
+        _step(job, t("원본 가져오는 중", "Fetching the original"))
         if sess["kind"] == "text":
             root = work / "src"
             root.mkdir()
@@ -520,46 +627,50 @@ def _rewrite_job(job: dict, sess: dict, lang: str, first_feedback: str = "") -> 
             root = root.parent if root.is_file() else root
         if not (root / "SKILL.md").is_file():
             dirs = rw.find_skill_dirs(root)
-            hint = (" 이 안에서 찾은 스킬 폴더: " + ", ".join(dirs[:8])) if dirs else ""
-            raise rw.RewriteError("SKILL.md가 있는 스킬 폴더만 재작성할 수 있습니다." + hint)
-        _step(job, "① 실행 파일 제거")
-        keep, drop, lic = rw.classify(root)
+            found = ", ".join(dirs[:8])
+            raise rw.RewriteError("SKILL.md가 있는 스킬 폴더만 재작성할 수 있습니다." + (" 이 안에서 찾은 스킬 폴더: " + found if dirs else ""),
+                                  "Only a skill folder with a SKILL.md can be rewritten." + (" Skill folders found inside: " + found if dirs else ""))
+        _step(job, t("① 실행 파일 제거", "① Removing executables"))
+        keep, drop, lic = rw.classify(root, ui)
         license_text = rw.find_license(root, work)
         if license_text and not lic:
             lic = license_text.strip().splitlines()[0][:120]
         if not any(f["path"] == "SKILL.md" for f in keep):
-            raise rw.RewriteError("SKILL.md를 읽을 수 없습니다 (너무 크거나 형식 문제).")
+            raise rw.RewriteError("SKILL.md를 읽을 수 없습니다 (너무 크거나 형식 문제).",
+                                  "Could not read SKILL.md (too large or malformed).")
         originals = {f["path"]: (root / f["path"]).read_text(encoding="utf-8", errors="replace") for f in keep}
         original_sha = rw.sha256_files(root, keep)
 
         rounds, feedback, files, report, checks = [], first_feedback, {}, "", []
         for rnd in range(1, MAX_ROUNDS + 1):
-            _step(job, f"② {rnd}차 재작성 중 (Claude)")
-            files, report = rw.parse_output(rw.run_claude(rw.build_prompt(root, keep, drop, lang, feedback)))
+            _step(job, t(f"② {rnd}차 재작성 중 (Claude)", f"② Rewrite round {rnd} (Claude)"))
+            files, report = rw.parse_output(rw.run_claude(rw.build_prompt(root, keep, drop, lang, feedback, ui)))
             name = rw.skill_name(files, sess.get("skill") or "rewritten-skill")
             new_dir = work / f"round{rnd}" / name
             new_dir.mkdir(parents=True)
             rw.write_files(new_dir, files)
-            _step(job, f"③ {rnd}차 자동 검증: 형식·새 위험 요소·복사율")
-            checks = [rw.check_format(files), rw.check_new_risks(originals, files), rw.check_copy(originals, files)]
-            _step(job, f"③ {rnd}차 자동 검증: 정적 재검사")
-            checks.append(_rescan_check(new_dir, False))
-            _step(job, f"③ {rnd}차 자동 검증: LLM 재검사 (Claude)")
-            checks.append(_rescan_check(new_dir, True))
-            _step(job, f"③ {rnd}차 자동 검증: 의도 보존 독립 검토 (별도 Claude)")
-            checks.append(rw.check_fidelity(originals, files))
+            _step(job, t(f"③ {rnd}차 자동 검증: 형식·새 위험 요소·복사율", f"③ Round {rnd} checks: format, new risks, copy ratio"))
+            checks = [rw.check_format(files, ui), rw.check_new_risks(originals, files, ui), rw.check_copy(originals, files, ui)]
+            _step(job, t(f"③ {rnd}차 자동 검증: 정적 재검사", f"③ Round {rnd} checks: static rescan"))
+            checks.append(_rescan_check(new_dir, False, ui))
+            _step(job, t(f"③ {rnd}차 자동 검증: LLM 재검사 (Claude)", f"③ Round {rnd} checks: LLM rescan (Claude)"))
+            checks.append(_rescan_check(new_dir, True, ui))
+            _step(job, t(f"③ {rnd}차 자동 검증: 의도 보존 독립 검토 (별도 Claude)",
+                         f"③ Round {rnd} checks: independent intent review (separate Claude)"))
+            checks.append(rw.check_fidelity(originals, files, ui))
             fails = [c for c in checks if c["status"] == "fail"]
             rounds.append({"round": rnd, "fails": [f"{c['name']}: {c['detail']}" for c in fails]})
             if not fails:
                 break
             feedback = rw.feedback_from(checks)
             if rnd < MAX_ROUNDS:
-                _step(job, f"{rnd}차 검증 실패 {len(fails)}건 → 문제점을 알려주고 다시 작성")
+                _step(job, t(f"{rnd}차 검증 실패 {len(fails)}건 → 문제점을 알려주고 다시 작성",
+                             f"Round {rnd}: {len(fails)} check(s) failed → sending the problems back for another rewrite"))
 
         passed = sum(c["status"] == "pass" for c in checks)
         ok_to_approve = not any(c["status"] == "fail" for c in checks)
         rid = secrets.token_urlsafe(12)
-        prov = {"tool": f"AS 스크리너 v{VERSION}", "source": sess["target"] or "붙여넣은 본문",
+        prov = {"tool": f"AS Screener v{VERSION}", "source": sess["target"] or "pasted text",
                 "source_kind": sess["kind"], "source_license": lic, "source_files_sha256": original_sha,
                 "original_verdict": sess["state"], "original_score": sess.get("score"),
                 "removed_files": drop, "rewrite_report": report, "auto_checks": checks, "rounds": rounds,
@@ -574,41 +685,42 @@ def _rewrite_job(job: dict, sess: dict, lang: str, first_feedback: str = "") -> 
                          "originals": {k: v[:30000] for k, v in originals.items()}, "report": report,
                          "checks": checks, "rounds": rounds, "passed": passed, "total": len(checks),
                          "ok_to_approve": ok_to_approve}
-        _step(job, "완료")
+        _step(job, t("완료", "Done"))
     except rw.RewriteError as exc:
-        job["result"] = {"ok": False, "error": str(exc)}
+        job["result"] = {"ok": False, "error": exc.text(ui)}
     except OSError as exc:
-        job["result"] = {"ok": False, "error": f"파일 처리 중 오류: {exc}"}
+        job["result"] = {"ok": False, "error": t(f"파일 처리 중 오류: {exc}", f"File error: {exc}")}
     except Exception as exc:  # noqa: BLE001  작업 스레드가 조용히 죽지 않게
-        job["result"] = {"ok": False, "error": f"예상하지 못한 오류: {exc}"}
+        job["result"] = {"ok": False, "error": t(f"예상하지 못한 오류: {exc}", f"Unexpected error: {exc}")}
     finally:
         job["status"] = "done"
         shutil.rmtree(work, ignore_errors=True)
 
 
-def do_approve(rewrite_id: str, name: str) -> dict:
+def do_approve(rewrite_id: str, name: str, ui: str = "en") -> dict:
     item = REWRITES.get(rewrite_id)
     if not item:
-        return {"ok": False, "error": "재작성 기록이 없습니다. 다시 재작성하세요."}
+        return {"ok": False, "error": tr(ui, "재작성 기록이 없습니다. 다시 재작성하세요.", "No rewrite record found. Rewrite again.")}
     if not item.get("ok"):
-        return {"ok": False, "error": "자동 검증을 통과하지 못해 저장할 수 없습니다."}
+        return {"ok": False, "error": tr(ui, "자동 검증을 통과하지 못해 저장할 수 없습니다.",
+                                         "It did not pass the automatic checks, so it cannot be saved.")}
     try:
         dest = rw.approve(BASE_DIR, name or item["name"], item["files"], item["prov"], item.get("license_text", ""))
     except OSError as exc:
-        return {"ok": False, "error": f"저장 실패: {exc}"}
+        return {"ok": False, "error": tr(ui, f"저장 실패: {exc}", f"Save failed: {exc}")}
     return {"ok": True, "path": str(dest), "name": dest.name}
 
 
 # ── 설치 관리 ────────────────────────────────────────────────────────────────
-def do_skills() -> dict:
+def do_skills(ui: str = "en") -> dict:
     try:
-        return {"ok": True, "skills": ins.list_skills(BASE_DIR),
+        return {"ok": True, "skills": ins.list_skills(BASE_DIR, ui),
                 "targets": {t: {"label": lbl, "path": str(ins.target_dir(t))} for t, (lbl, _) in ins.TARGETS.items()}}
     except OSError as exc:
-        return {"ok": False, "error": f"목록을 읽지 못했습니다: {exc}"}
+        return {"ok": False, "error": tr(ui, f"목록을 읽지 못했습니다: {exc}", f"Could not read the list: {exc}")}
 
 
-def do_install(body: dict, remove: bool = False) -> dict:
+def do_install(body: dict, remove: bool = False, ui: str = "en") -> dict:
     name, target = str(body.get("name", "")), str(body.get("target", "claude"))
     try:
         if remove:
@@ -616,9 +728,9 @@ def do_install(body: dict, remove: bool = False) -> dict:
         else:
             dest = ins.install(BASE_DIR, name, target, overwrite=bool(body.get("overwrite")))
     except ins.InstallError as exc:
-        return {"ok": False, "code": exc.code, "error": str(exc)}
+        return {"ok": False, "code": exc.code, "error": exc.text(ui)}
     except OSError as exc:
-        return {"ok": False, "code": "os", "error": f"파일 작업 실패: {exc}"}
+        return {"ok": False, "code": "os", "error": tr(ui, f"파일 작업 실패: {exc}", f"File operation failed: {exc}")}
     return {"ok": True, "path": str(dest)}
 
 
@@ -654,25 +766,29 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self._host_ok():
             return self._send(403, b"forbidden", "text/plain")
-        if self.path == "/":
+        path, _, query = self.path.partition("?")
+        qs = urllib.parse.parse_qs(query)
+        ui = norm((qs.get("lang") or [""])[0])
+        if path == "/":
             html = PAGE.replace("__TOKEN__", TOKEN).replace("__VERSION__", VERSION)
             return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
-        if self.path.startswith("/api/job?id="):
+        if path == "/api/job":
             if not self._authorized():
                 return self._json(403, {"error": "forbidden"})
-            job = JOBS.get(self.path.split("=", 1)[1])
+            job = JOBS.get((qs.get("id") or [""])[0])
             if not job:
-                return self._json(200, {"status": "done", "result": {"ok": False, "error": "작업 기록이 없습니다."}})
+                return self._json(200, {"status": "done", "result": {"ok": False,
+                                                                     "error": tr(ui, "작업 기록이 없습니다.", "No job record found.")}})
             return self._json(200, {"status": job["status"], "step": job["step"], "log": job["log"],
                                     "result": job["result"] if job["status"] == "done" else None})
-        if self.path == "/api/precheck":
+        if path == "/api/precheck":
             if not self._authorized():
                 return self._json(403, {"error": "forbidden"})
-            return self._json(200, precheck())
-        if self.path == "/api/skills":
+            return self._json(200, precheck(ui))
+        if path == "/api/skills":
             if not self._authorized():
                 return self._json(403, {"error": "forbidden"})
-            return self._json(200, do_skills())
+            return self._json(200, do_skills(ui))
         self._send(404, b"not found", "text/plain")
 
     def do_POST(self):
@@ -680,25 +796,30 @@ class Handler(BaseHTTPRequestHandler):
                 or not self._authorized():
             return self._json(403, {"error": "forbidden"})
         length = int(self.headers.get("Content-Length", "0"))
+        ui = norm(self.headers.get("X-AS-Lang", ""))   # 화면 언어 (본문의 "ui"가 있으면 그쪽 우선)
         if length <= 0 or length > MAX_PASTE_BYTES * 2:
-            return self._json(400, {"state": "fail", "title": "입력이 비었거나 너무 큽니다", "detail": ""})
+            return self._json(400, {"state": "fail", "title": tr(ui, "입력이 비었거나 너무 큽니다", "The input is empty or too large"),
+                                    "detail": ""})
         try:
             body = json.loads(self.rfile.read(length).decode("utf-8"))
         except ValueError:
-            return self._json(400, {"state": "fail", "title": "잘못된 요청", "detail": ""})
+            return self._json(400, {"state": "fail", "title": tr(ui, "잘못된 요청", "Bad request"), "detail": ""})
+        if not isinstance(body, dict):
+            return self._json(400, {"ok": False, "state": "fail", "title": tr(ui, "잘못된 요청", "Bad request"),
+                                    "error": tr(ui, "잘못된 요청", "Bad request"), "detail": ""})
+        ui = norm(body.get("ui") or ui)
         if self.path == "/api/rewrite":
-            return self._json(200, start_rewrite(str(body.get("scan_id", "")), str(body.get("lang", "ko")),
-                                                 str(body.get("feedback", ""))))
+            return self._json(200, start_rewrite(str(body.get("scan_id", "")), str(body.get("lang", ui)),
+                                                 str(body.get("feedback", "")), ui))
         if self.path == "/api/approve":
-            return self._json(200, do_approve(str(body.get("rewrite_id", "")), str(body.get("name", ""))))
+            return self._json(200, do_approve(str(body.get("rewrite_id", "")), str(body.get("name", "")), ui))
         if self.path in ("/api/install", "/api/uninstall"):
-            if not isinstance(body, dict):
-                return self._json(400, {"ok": False, "error": "잘못된 요청"})
-            return self._json(200, do_install(body, remove=self.path == "/api/uninstall"))
+            return self._json(200, do_install(body, remove=self.path == "/api/uninstall", ui=ui))
         raw = str(body.get("input", ""))
         if not raw.strip():
-            return self._json(400, {"state": "fail", "title": "검사할 내용을 붙여넣어 주세요", "detail": ""})
-        self._json(200, run_scan(raw, bool(body.get("llm"))))
+            return self._json(400, {"state": "fail", "title": tr(ui, "검사할 내용을 붙여넣어 주세요", "Paste something to scan"),
+                                    "detail": ""})
+        self._json(200, run_scan(raw, bool(body.get("llm")), ui))
 
 
 class QuietServer(ThreadingHTTPServer):
@@ -712,8 +833,8 @@ class QuietServer(ThreadingHTTPServer):
 
 
 PAGE = r"""<!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AS 스크리너</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AS Screener</title>
 <style>
 :root{--bg:#f6f5f2;--card:#fff;--ink:#1c1b19;--sub:#6b6862;--line:#e3e0d9;--accent:#2f5d50;
 --pass:#2e7d4f;--pass-bg:#e8f4ec;--block:#b3261e;--block-bg:#fbeaea;--caution:#a15c00;--caution-bg:#fdf1de;--fail:#5b5b66;--fail-bg:#ececf1}
@@ -721,7 +842,7 @@ PAGE = r"""<!doctype html>
 --pass:#7fd39c;--pass-bg:#1d2f23;--block:#ff8a80;--block-bg:#3a1e1c;--caution:#f0b862;--caution-bg:#3a2c16;--fail:#b9b9c4;--fail-bg:#2a2a30}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 "Pretendard","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif}
 .wrap{max-width:920px;margin:0 auto;padding:28px 16px 60px}
-header{display:flex;align-items:baseline;gap:12px;margin-bottom:18px}
+header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}
 h1{font-size:22px;margin:0;letter-spacing:-.02em}h1 b{color:var(--accent)}
 .ver{color:var(--sub);font-size:13px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}
@@ -789,18 +910,22 @@ button.sm{padding:4px 11px;font-size:12.5px;border-radius:8px;margin:4px 4px 0 0
 button.danger{background:transparent;color:var(--block);border:1px solid var(--block)}
 td .prob{color:var(--block);font-size:12px;margin-top:3px}td .src{font:12px ui-monospace,Consolas,monospace;color:var(--sub);word-break:break-all}
 .msg{font-size:13px;margin-top:8px;white-space:pre-wrap}.msg.err{color:var(--block)}.msg.ok{color:var(--pass)}
+.langsw{margin-left:auto;display:flex;border:1px solid var(--line);border-radius:999px;overflow:hidden}
+.langsw button{background:transparent;color:var(--sub);border:0;border-radius:0;padding:4px 12px;font-size:12.5px;font-weight:600}
+.langsw button[aria-pressed="true"]{background:var(--accent);color:#fff}
 @media (max-width:640px){td.where-col,th.where-col{display:none}.verdict .score{margin-left:0;text-align:left}}
 </style></head><body><div class="wrap">
-<header><h1><b>AS</b> 스크리너</h1><span class="ver">에이전트·스킬 검사 · v__VERSION__</span></header>
+<header><h1><b>AS</b> <span data-t="brand"></span></h1><span class="ver"><span data-t="tagline"></span> · v__VERSION__</span>
+<div class="langsw" role="group" aria-label="Language"><button type="button" data-lang="en" lang="en">EN</button><button type="button" data-lang="ko" lang="ko">한국어</button></div></header>
 <div class="card">
-<textarea id="inp" placeholder="여기에 붙여넣기&#10;&#10;· 깃허브 주소   https://github.com/사용자/저장소/tree/main/skills/이름&#10;· 폴더 경로     D:\다운로드\some-skill&#10;· SKILL.md 본문 전체"></textarea>
-<div class="hint">스킬 코드는 실행하지 않고 읽기만 합니다. 깃허브는 저장소 전체보다 스킬 폴더 주소가 빠릅니다.</div>
+<textarea id="inp"></textarea>
+<div class="hint" data-t="hint"></div>
 <div class="row">
-<label class="llm"><input type="checkbox" id="llm"><span>LLM 정밀검사도 하기<small id="llmnote">영어 외 언어·교묘한 지시까지 잡습니다. Claude 사용량이 들고 30~60초 걸립니다.</small></span></label>
-<button id="go">검사하기</button></div>
-<div class="status" id="status"><span class="pill">상태 확인 중…</span></div>
+<label class="llm"><input type="checkbox" id="llm"><span><span data-t="llm"></span><small id="llmnote"></small></span></label>
+<button id="go" data-t="scan"></button></div>
+<div class="status" id="status"><span class="pill" data-t="checking"></span></div>
 </div>
-<details class="mine" id="mine"><summary><b>내 스킬</b> <span id="minecount">승인된 스킬 확인 중…</span></summary>
+<details class="mine" id="mine"><summary><b data-t="mine"></b> <span id="minecount"></span></summary>
 <div class="card" style="padding:6px 14px" id="minebox"></div><div class="msg" id="minemsg"></div></details>
 <div id="result"></div>
 </div>
@@ -808,149 +933,194 @@ td .prob{color:var(--block);font-size:12px;margin-top:3px}td .src{font:12px ui-m
 const TOKEN="__TOKEN__";
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const SEV={CRITICAL:"치명",HIGH:"높음",MEDIUM:"중간",LOW:"낮음",INFO:"참고"};
-async function api(path,opt={}){opt.headers=Object.assign({"X-AS-Token":TOKEN,"Content-Type":"application/json"},opt.headers||{});
+// 화면 언어: 저장된 선택 > 브라우저가 한국어면 한국어 > 영어(기본)
+let LANG=(()=>{try{const s=localStorage.getItem("as_lang");if(s==="ko"||s==="en")return s;}catch(e){}
+ return (navigator.language||"").toLowerCase().startsWith("ko")?"ko":"en";})();
+const L=(ko,en)=>LANG==="ko"?ko:en;
+const STATIC={
+ brand:["스크리너","Screener"], tagline:["에이전트·스킬 검사","Agent skill scanner"],
+ hint:["스킬 코드는 실행하지 않고 읽기만 합니다. 깃허브는 저장소 전체보다 스킬 폴더 주소가 빠릅니다.",
+       "Skill code is only read, never executed. For GitHub, a skill folder URL is faster than a whole repository."],
+ llm:["LLM 정밀검사도 하기","Also run the LLM deep scan"], scan:["검사하기","Scan"], checking:["상태 확인 중…","Checking setup…"],
+ mine:["내 스킬","My skills"]};
+const PH=[`여기에 붙여넣기\n\n· 깃허브 주소   https://github.com/사용자/저장소/tree/main/skills/이름\n· 폴더 경로     D:\\다운로드\\some-skill\n· SKILL.md 본문 전체`,
+ `Paste here\n\n· GitHub URL    https://github.com/user/repo/tree/main/skills/name\n· Folder path   D:\\Downloads\\some-skill\n· The full SKILL.md text`];
+const LLMNOTE=()=>L("영어 외 언어·교묘한 지시까지 잡습니다. Claude 사용량이 들고 30~60초 걸립니다.",
+ "Catches non-English and subtle instructions too. Uses your Claude usage and takes 30–60 seconds.");
+function applyStatic(){
+ document.documentElement.lang=LANG; document.title=L("AS 스크리너","AS Screener");
+ document.querySelectorAll("[data-t]").forEach(e=>{const v=STATIC[e.dataset.t];if(v)e.textContent=v[LANG==="ko"?0:1];});
+ $("#inp").placeholder=PH[LANG==="ko"?0:1];
+ if(!$("#llm").disabled) $("#llmnote").textContent=LLMNOTE();
+ document.querySelectorAll(".langsw button").forEach(b=>b.setAttribute("aria-pressed",b.dataset.lang===LANG?"true":"false"));}
+let LAST_R=null, LAST_RW=null;
+function setLang(l){if(l===LANG)return;LANG=l;try{localStorage.setItem("as_lang",l);}catch(e){}
+ applyStatic();pre();loadMine();
+ if(LAST_R){const rw=LAST_RW;render(LAST_R);if(rw){LAST_RW=rw;renderRewrite(rw);const b=$("#rw");if(b)b.disabled=true;}}}
+document.querySelectorAll(".langsw button").forEach(b=>b.onclick=()=>setLang(b.dataset.lang));
+const SEV=()=>L({CRITICAL:"치명",HIGH:"높음",MEDIUM:"중간",LOW:"낮음",INFO:"참고"},{CRITICAL:"Critical",HIGH:"High",MEDIUM:"Medium",LOW:"Low",INFO:"Info"});
+async function api(path,opt={}){opt.headers=Object.assign({"X-AS-Token":TOKEN,"X-AS-Lang":LANG,"Content-Type":"application/json"},opt.headers||{});
  const r=await fetch(path,opt);return r.json();}
-async function pre(){try{const p=await api("/api/precheck");
- const pills=[[p.skillspector,p.skillspector?"SkillSpector "+p.skillspector_version:"SkillSpector 미설치"],
-  [p.rules,p.rules?"한국어·중국어·일본어 규칙 + 영어 은폐 규칙 적용":"우리 규칙 없음"],
-  [p.claude&&p.claude_logged_in,p.claude_logged_in?"Claude 로그인됨 (LLM 가능)":(p.claude?"Claude 로그인 필요":"Claude Code 미설치")]];
+const q=p=>p+(p.includes("?")?"&":"?")+"lang="+LANG;
+async function pre(){try{const p=await api(q("/api/precheck"));
+ const pills=[[p.skillspector,p.skillspector?"SkillSpector "+p.skillspector_version:L("SkillSpector 미설치","SkillSpector not installed")],
+  [p.rules,p.rules?L("한국어·중국어·일본어 규칙 + 영어 은폐 규칙 적용","Korean/Chinese/Japanese rules + English concealment rules on"):L("우리 규칙 없음","Rules folder missing")],
+  [p.claude&&p.claude_logged_in,p.claude_logged_in?L("Claude 로그인됨 (LLM 가능)","Claude logged in (LLM available)")
+   :(p.claude?L("Claude 로그인 필요","Claude login needed"):L("Claude Code 미설치","Claude Code not installed"))]];
  $("#status").innerHTML=pills.map(([ok,t])=>`<span class="pill ${ok?"ok":"no"}">${esc(t)}</span>`).join("");
- if(!(p.claude&&p.claude_logged_in)){$("#llm").disabled=true;$("#llmnote").textContent=p.claude_message+" (1차 검사는 그대로 가능)";}
- if(!p.skillspector){$("#go").disabled=true;}
-}catch(e){$("#status").innerHTML='<span class="pill no">서버 연결 실패</span>';}}
-function table(list){let t=`<table><thead><tr><th>심각도</th><th>발견 내용</th><th class="where-col">위치</th></tr></thead><tbody>`;
-  for(const i of list){t+=`<tr><td><span class="sev ${esc(i.severity)}">${esc(SEV[i.severity]||i.severity)}</span></td>
+ if(!(p.claude&&p.claude_logged_in)){$("#llm").disabled=true;$("#llmnote").textContent=p.claude_message+L(" (1차 검사는 그대로 가능)"," (the first-pass scan still works)");}
+ else{$("#llm").disabled=false;$("#llmnote").textContent=LLMNOTE();}
+ $("#go").disabled=!p.skillspector;
+}catch(e){$("#status").innerHTML=`<span class="pill no">${esc(L("서버 연결 실패","Can't reach the local server"))}</span>`;}}
+function table(list){const sev=SEV();
+ let t=`<table><thead><tr><th>${L("심각도","Severity")}</th><th>${L("발견 내용","Finding")}</th><th class="where-col">${L("위치","Location")}</th></tr></thead><tbody>`;
+  for(const i of list){t+=`<tr><td><span class="sev ${esc(i.severity)}">${esc(sev[i.severity]||i.severity)}</span></td>
    <td><div class="t">${esc(i.title)} <span class="where">${esc(i.id)}</span></div><div class="d">${esc(i.desc)}</div>${i.snippet?`<code class="snip">${esc(i.snippet)}</code>`:""}</td>
    <td class="where where-col">${esc(i.where)}</td></tr>`;}
   return t+`</tbody></table>`;}
 function timingLine(t){if(!t)return "";
  // 표시 단위로 먼저 반올림하고 AS 스크리너 몫은 '총 - SkillSpector'로 계산 → 항상 더하면 총이 맞음
  const d=t.total<10?1:0, T=+t.total.toFixed(d), S=Math.min(+t.skillspector.toFixed(d),T), O=(T-S).toFixed(d);
- let h=`<div class="meta">검사 시간 ${T.toFixed(d)}초 — <b>SkillSpector(NVIDIA) ${S.toFixed(d)}초</b> · AS 스크리너 ${O}초</div>`;
- if(t.skillspector>=60) h+=`<div class="hint">SkillSpector는 PC가 멈추지 않도록 낮은 우선순위로 돌립니다. 다른 작업을 하고 있으면 더 오래 걸립니다.</div>`;
+ let h=`<div class="meta">${L(`검사 시간 ${T.toFixed(d)}초 — <b>SkillSpector(NVIDIA) ${S.toFixed(d)}초</b> · AS 스크리너 ${O}초`,
+  `Scan time ${T.toFixed(d)}s — <b>SkillSpector (NVIDIA) ${S.toFixed(d)}s</b> · AS Screener ${O}s`)}</div>`;
+ if(t.skillspector>=60) h+=`<div class="hint">${L("SkillSpector는 PC가 멈추지 않도록 낮은 우선순위로 돌립니다. 다른 작업을 하고 있으면 더 오래 걸립니다.",
+  "SkillSpector runs at low priority so your PC stays responsive. It takes longer while you're doing other work.")}</div>`;
  return h;}
 function render(r){
+ LAST_R=r; LAST_RW=null;
  const icon={pass:"✓",block:"✕",caution:"!",fail:"?"}[r.state]||"";
  let h=`<div class="verdict ${r.state}"><div><div class="big">${icon} ${esc(r.title)}</div><p>${esc(r.detail)}</p></div>`;
- if(r.score!=null) h+=`<div class="score">원본 그대로 설치 시<br><b>${esc(r.score)}</b>/100</div>`;
+ if(r.score!=null) h+=`<div class="score">${L("원본 그대로 설치 시","Risk if installed as-is")}<br><b>${esc(r.score)}</b>/100</div>`;
  h+=`</div>`;
- const kind={url:"깃허브·웹 주소",path:"폴더 경로",text:"붙여넣은 본문"}[r.kind]||"";
- if(r.skill||kind) h+=`<div class="meta">${esc(r.skill?"스킬: "+r.skill+" · ":"")}${esc(kind)} · ${r.llm?"1차 + LLM 정밀검사":"1차 검사(정적 + 한국어·중국어·일본어 규칙 + 영어 은폐 규칙)"}${r.coverage!=null?" · 검사 범위 "+esc(Math.round(r.coverage))+"%":""}</div>`;
+ const kind=(L({url:"깃허브·웹 주소",path:"폴더 경로",text:"붙여넣은 본문"},{url:"GitHub / web URL",path:"Folder path",text:"Pasted text"}))[r.kind]||"";
+ const mode=r.llm?L("1차 + LLM 정밀검사","First pass + LLM deep scan")
+  :L("1차 검사(정적 + 한국어·중국어·일본어 규칙 + 영어 은폐 규칙)","First pass (static + Korean/Chinese/Japanese rules + English concealment rules)");
+ if(r.skill||kind) h+=`<div class="meta">${esc(r.skill?L("스킬: ","Skill: ")+r.skill+" · ":"")}${esc(kind)} · ${esc(mode)}${r.coverage!=null?" · "+L("검사 범위 ","coverage ")+esc(Math.round(r.coverage))+"%":""}</div>`;
  const instr=(r.issues||[]).filter(i=>i.group!=="code"), code=(r.issues||[]).filter(i=>i.group==="code");
  h+=timingLine(r.timing);
  if(r.state==="fail"&&!(r.issues&&r.issues.length)){$("#result").innerHTML=h;return;}
- h+=`<h2 class="sec">에이전트 지침 <span>판정 기준 · ${instr.length}건</span></h2>`;
+ h+=`<h2 class="sec">${L("에이전트 지침","Agent instructions")} <span>${L(`판정 기준 · ${instr.length}건`,`basis of the verdict · ${instr.length}`)}</span></h2>`;
  h+= instr.length?`<div class="card" style="padding:6px 14px">${table(instr)}</div>`
-   :`<div class="card empty">SKILL.md·명령·규칙 파일에서 위험한 지시가 발견되지 않았습니다.</div>`;
+   :`<div class="card empty">${L("SKILL.md·명령·규칙 파일에서 위험한 지시가 발견되지 않았습니다.","No dangerous instructions in SKILL.md, command or rule files.")}</div>`;
  if(code.length){
-  h+=`<details class="codegrp"><summary><b>코드·의존성</b> ${code.length}건 · AS 스크리너가 가져오지 않는 파일 (참고)</summary>
+  h+=`<details class="codegrp"><summary><b>${L("코드·의존성","Code and dependencies")}</b> ${L(`${code.length}건 · AS 스크리너가 가져오지 않는 파일 (참고)`,`${code.length} · files AS Screener never brings in (for reference)`)}</summary>
    <p class="hint">${esc(r.code_note)}</p><div class="card" style="padding:6px 14px">${table(code)}</div></details>`;}
  if(r.state==="pass"||r.state==="caution"){
-  h+=`<div class="next"><button id="rw">다음: 실행 파일 제거 → 우리 말로 재작성 → 승인</button>
-   <select id="lang"><option value="ko">한국어로</option><option value="en">영어로</option></select>
-   <span>Claude 사용량이 들고 3~5분 걸립니다 (재작성 + 자동 검증).</span></div>`;
+  h+=`<div class="next"><button id="rw">${L("다음: 실행 파일 제거 → 우리 말로 재작성 → 승인","Next: strip executables → rewrite the intent → approve")}</button>
+   <select id="lang" aria-label="${L("새 스킬 언어","Language of the new skill")}"><option value="en"${LANG==="en"?" selected":""}>${L("영어로","In English")}</option><option value="ko"${LANG==="ko"?" selected":""}>${L("한국어로","In Korean")}</option></select>
+   <span>${L("Claude 사용량이 들고 3~5분 걸립니다 (재작성 + 자동 검증).","Uses your Claude usage and takes 3–5 minutes (rewrite + automatic checks).")}</span></div>`;
  } else if(r.state==="block"){
-  h+=`<div class="next"><button disabled>재작성 불가</button><span>차단된 스킬은 재작성하지 않습니다.</span></div>`;}
+  h+=`<div class="next"><button disabled>${L("재작성 불가","Can't rewrite")}</button><span>${L("차단된 스킬은 재작성하지 않습니다.","Blocked skills are not rewritten.")}</span></div>`;}
  h+=`<div id="rwout"></div>`;
  $("#result").innerHTML=h;
  const b=$("#rw"); if(b) b.onclick=()=>startRewrite(r.scan_id);}
 let LAST_SID=null;
 async function startRewrite(sid,feedback){
- LAST_SID=sid; $("#rw").disabled=true;
+ LAST_SID=sid; LAST_RW=null; $("#rw").disabled=true;
  const box=(steps,cur)=>`<div class="verdict fail progress" style="margin-top:14px"><div><div class="big"><span class="spin"></span>${esc(cur)}</div>
-  <p>원문은 데이터로만 읽고 도구 없이 새로 씁니다. 자동 검증 6가지를 통과해야 승인 요청이 나옵니다. (보통 3~5분)</p>
+  <p>${L("원문은 데이터로만 읽고 도구 없이 새로 씁니다. 자동 검증 6가지를 통과해야 승인 요청이 나옵니다. (보통 3~5분)",
+   "The original is read only as data and rewritten with no tools. You're asked to approve only after six automatic checks pass. (Usually 3–5 minutes)")}</p>
   <ol class="steps">${steps.slice(0,-1).map(t=>`<li>${esc(t)}</li>`).join("")}</ol></div></div>`;
- $("#rwout").innerHTML=box([],"시작하는 중…");
- let st; try{st=await api("/api/rewrite",{method:"POST",body:JSON.stringify({scan_id:sid,lang:$("#lang").value,feedback:feedback||""})});}
+ $("#rwout").innerHTML=box([],L("시작하는 중…","Starting…"));
+ let st; try{st=await api("/api/rewrite",{method:"POST",body:JSON.stringify({scan_id:sid,lang:$("#lang").value,ui:LANG,feedback:feedback||""})});}
  catch(e){return renderRewrite({ok:false,error:String(e)});}
  if(!st.ok) return renderRewrite(st);
  while(true){
   await new Promise(r=>setTimeout(r,1500));
-  let j; try{j=await api("/api/job?id="+encodeURIComponent(st.job_id));}catch(e){continue;}
-  if(j.status==="done") return renderRewrite(j.result||{ok:false,error:"결과 없음"});
-  $("#rwout").innerHTML=box(j.log||[],j.step||"진행 중");}}
+  let j; try{j=await api(q("/api/job?id="+encodeURIComponent(st.job_id)));}catch(e){continue;}
+  if(j.status==="done") return renderRewrite(j.result||{ok:false,error:L("결과 없음","No result")});
+  $("#rwout").innerHTML=box(j.log||[],j.step||L("진행 중","Working"));}}
 const ICON={pass:"✓",warn:"!",fail:"✕",skip:"–"};
 function renderRewrite(d){
+ LAST_RW=d;
  const fid=(d.checks||[]).find(c=>c.id==="fidelity");
- if(!d.ok){$("#rwout").innerHTML=`<div class="verdict fail" style="margin-top:14px"><div><div class="big">? 재작성 실패</div><p>${esc(d.error)}</p></div></div>`;$("#rw").disabled=false;return;}
- const warns=d.checks.filter(c=>c.status==="warn").length;
+ if(!d.ok){$("#rwout").innerHTML=`<div class="verdict fail" style="margin-top:14px"><div><div class="big">? ${L("재작성 실패","Rewrite failed")}</div><p>${esc(d.error)}</p></div></div>`;$("#rw").disabled=false;return;}
+ const warns=d.checks.filter(c=>c.status==="warn").length, nr=d.rounds.length;
  let h=`<div class="verdict ${d.ok_to_approve?(warns?"caution":"pass"):"block"}" style="margin-top:14px"><div>
-   <div class="big">${d.ok_to_approve?"승인 요청":"승인 불가"} · 자동 검증 ${d.passed}/${d.total} 통과${warns?` (주의 ${warns})`:""}</div>
-   <p>${d.rounds.length>1?`1차 시도에서 문제가 발견돼 자동으로 다시 썼습니다 (${d.rounds.length}차까지 진행). `:""}${d.ok_to_approve?"아래 검증 결과를 확인하고 승인하세요.":"자동 재작성 후에도 검증을 통과하지 못했습니다. 이 스킬은 직접 만드는 편이 낫습니다."}</p></div></div>`;
- h+=`<h2 class="sec">자동 검증 <span>${d.rounds.length}차 결과</span></h2><div class="card checks">`;
+   <div class="big">${d.ok_to_approve?L("승인 요청","Ready for approval"):L("승인 불가","Can't be approved")} · ${L(`자동 검증 ${d.passed}/${d.total} 통과`,`${d.passed}/${d.total} automatic checks passed`)}${warns?L(` (주의 ${warns})`,` (${warns} caution)`):""}</div>
+   <p>${nr>1?L(`1차 시도에서 문제가 발견돼 자동으로 다시 썼습니다 (${nr}차까지 진행). `,`The first attempt had problems, so it was rewritten automatically (${nr} rounds). `):""}${d.ok_to_approve?L("아래 검증 결과를 확인하고 승인하세요.","Review the check results below, then approve.")
+    :L("자동 재작성 후에도 검증을 통과하지 못했습니다. 이 스킬은 직접 만드는 편이 낫습니다.","It still failed the checks after the automatic rewrite. You're better off writing this skill yourself.")}</p></div></div>`;
+ h+=`<h2 class="sec">${L("자동 검증","Automatic checks")} <span>${L(`${nr}차 결과`,`round ${nr} results`)}</span></h2><div class="card checks">`;
  for(const c of d.checks) h+=`<div class="chk c-${esc(c.status)}"><span class="ic">${ICON[c.status]||"?"}</span><div><b>${esc(c.name)}</b><div class="d">${esc(c.detail)}</div></div></div>`;
  h+=`</div>`;
- if(d.rounds.length>1) h+=`<div class="hint">이전 시도에서 걸린 문제: ${esc(d.rounds.slice(0,-1).map(r=>r.round+"차 — "+r.fails.join("; ")).join(" / "))}</div>`;
- h+=`<h2 class="sec">④ 승인</h2><div class="card approve"><label>저장할 이름 <input id="aname" value="${esc(d.name)}"></label>
-  <button id="ap" ${d.ok_to_approve?"":"disabled"}>승인하고 저장</button>
-  ${fid&&fid.status==="warn"?`<button id="fix" class="ghost">빠진 내용 보완해서 다시 쓰기</button>`:""}<div class="lic-note ${d.has_license?"":"nolic"}">${d.has_license?`원본 라이선스: <b>${esc(d.license)}</b> · 원문을 <code>LICENSE.original</code>로 함께 저장합니다. 번역·재작성도 2차 저작물이라 라이선스 조건(저작권 표시 등)을 따라야 합니다.`:`원본 라이선스를 찾지 못했습니다. 재작성·번역도 2차 저작물일 수 있으니 <b>개인 사용만</b> 하고 배포·판매는 하지 마세요.`}</div>
-  <div id="apout" class="hint">${d.ok_to_approve?"승인하면 approved 폴더에 출처 기록·검증 결과와 함께 저장됩니다.":"자동 검증을 통과하지 못해 저장할 수 없습니다."}</div></div>`;
- h+=`<details class="more"><summary>자세히 보기 — 버린 파일 ${d.removed.length}개 · 재작성 보고 · 원본과 새 버전 비교</summary>`;
- h+=`<h2 class="sec">① 실행 파일 제거 <span>가져온 지침 ${d.kept.length}개 · 버린 파일 ${d.removed.length}개</span></h2><div class="card files">`;
- h+=d.kept.map(f=>`<div class="frow keep">가져옴 <code>${esc(f.path)}</code></div>`).join("");
- h+=d.removed.slice(0,40).map(f=>`<div class="frow drop">버림 <code>${esc(f.path)}</code> <span>${esc(f.reason)}</span></div>`).join("");
- if(d.removed.length>40) h+=`<div class="frow drop">… 외 ${d.removed.length-40}개</div>`;
- if(d.license) h+=`<div class="frow lic">원본 라이선스: ${esc(d.license)}</div>`;
- h+=`</div><h2 class="sec">② 우리 말로 재작성 <span>원문 복사 없이 의도만</span></h2>`;
+ if(nr>1) h+=`<div class="hint">${L("이전 시도에서 걸린 문제: ","Problems in earlier attempts: ")}${esc(d.rounds.slice(0,-1).map(r=>L(r.round+"차 — ","Round "+r.round+" — ")+r.fails.join("; ")).join(" / "))}</div>`;
+ h+=`<h2 class="sec">④ ${L("승인","Approve")}</h2><div class="card approve"><label>${L("저장할 이름","Save as")} <input id="aname" value="${esc(d.name)}"></label>
+  <button id="ap" ${d.ok_to_approve?"":"disabled"}>${L("승인하고 저장","Approve and save")}</button>
+  ${fid&&fid.status==="warn"?`<button id="fix" class="ghost">${L("빠진 내용 보완해서 다시 쓰기","Rewrite again, restoring what was missed")}</button>`:""}<div class="lic-note ${d.has_license?"":"nolic"}">${d.has_license
+   ?L(`원본 라이선스: <b>${esc(d.license)}</b> · 원문을 <code>LICENSE.original</code>로 함께 저장합니다. 번역·재작성도 2차 저작물이라 라이선스 조건(저작권 표시 등)을 따라야 합니다.`,
+      `Original license: <b>${esc(d.license)}</b> · saved alongside as <code>LICENSE.original</code>. A translation or rewrite is still a derivative work, so follow the license terms (such as keeping the copyright notice).`)
+   :L(`원본 라이선스를 찾지 못했습니다. 재작성·번역도 2차 저작물일 수 있으니 <b>개인 사용만</b> 하고 배포·판매는 하지 마세요.`,
+      `No license found in the original. A rewrite or translation may still be a derivative work, so use it <b>for yourself only</b> — don't redistribute or sell it.`)}</div>
+  <div id="apout" class="hint">${d.ok_to_approve?L("승인하면 approved 폴더에 출처 기록·검증 결과와 함께 저장됩니다.","Approving saves it to the approved folder with its provenance record and check results.")
+   :L("자동 검증을 통과하지 못해 저장할 수 없습니다.","It did not pass the automatic checks, so it can't be saved.")}</div></div>`;
+ h+=`<details class="more"><summary>${L(`자세히 보기 — 버린 파일 ${d.removed.length}개 · 재작성 보고 · 원본과 새 버전 비교`,`Details — ${d.removed.length} file(s) removed · rewrite report · original vs. new`)}</summary>`;
+ h+=`<h2 class="sec">① ${L("실행 파일 제거","Executables removed")} <span>${L(`가져온 지침 ${d.kept.length}개 · 버린 파일 ${d.removed.length}개`,`${d.kept.length} instruction file(s) kept · ${d.removed.length} removed`)}</span></h2><div class="card files">`;
+ h+=d.kept.map(f=>`<div class="frow keep">${L("가져옴","Kept")} <code>${esc(f.path)}</code></div>`).join("");
+ h+=d.removed.slice(0,40).map(f=>`<div class="frow drop">${L("버림","Removed")} <code>${esc(f.path)}</code> <span>${esc(f.reason)}</span></div>`).join("");
+ if(d.removed.length>40) h+=`<div class="frow drop">${L(`… 외 ${d.removed.length-40}개`,`… and ${d.removed.length-40} more`)}</div>`;
+ if(d.license) h+=`<div class="frow lic">${L("원본 라이선스: ","Original license: ")}${esc(d.license)}</div>`;
+ h+=`</div><h2 class="sec">② ${L("우리 말로 재작성","Rewritten")} <span>${L("원문 복사 없이 의도만","intent only, no copied text")}</span></h2>`;
  if(d.report) h+=`<div class="card"><pre class="report">${esc(d.report)}</pre></div>`;
  for(const [path,txt] of Object.entries(d.files)){
   const orig=d.originals[path];
-  h+=`<details class="cmp"><summary><b>${esc(path)}</b> ${orig?"원본과 비교":"새로 만든 파일"}</summary><div class="${orig?"two":""}">`;
-  if(orig) h+=`<div><div class="lbl">원본</div><pre class="doc">${esc(orig)}</pre></div>`;
-  h+=`<div><div class="lbl new">새 버전</div><pre class="doc">${esc(txt)}</pre></div></div></details>`;}
+  h+=`<details class="cmp"><summary><b>${esc(path)}</b> ${orig?L("원본과 비교","compare with the original"):L("새로 만든 파일","new file")}</summary><div class="${orig?"two":""}">`;
+  if(orig) h+=`<div><div class="lbl">${L("원본","Original")}</div><pre class="doc">${esc(orig)}</pre></div>`;
+  h+=`<div><div class="lbl new">${L("새 버전","New version")}</div><pre class="doc">${esc(txt)}</pre></div></div></details>`;}
  h+=`</details>`;
  $("#rwout").innerHTML=h;
  const ap=$("#ap"); if(ap) ap.onclick=async()=>{ap.disabled=true;
-  const r=await api("/api/approve",{method:"POST",body:JSON.stringify({rewrite_id:d.rewrite_id,name:$("#aname").value})});
-  $("#apout").innerHTML=r.ok?`<b class="okmsg">저장 완료</b> <code>${esc(r.path)}</code><br>출처 기록·검증 결과는 <code>AS_SCREENER.json</code>, 원본 라이선스는 <code>LICENSE.original</code>에 있습니다.
-   <div style="margin-top:8px"><button class="sm" id="inst">바로 설치 (Claude Code)</button> <span class="hint">나중에 '내 스킬'에서 설치·제거할 수도 있습니다.</span></div><div class="msg" id="instmsg"></div>`:esc(r.error);
+  const r=await api("/api/approve",{method:"POST",body:JSON.stringify({rewrite_id:d.rewrite_id,name:$("#aname").value,ui:LANG})});
+  $("#apout").innerHTML=r.ok?L(`<b class="okmsg">저장 완료</b> <code>${esc(r.path)}</code><br>출처 기록·검증 결과는 <code>AS_SCREENER.json</code>, 원본 라이선스는 <code>LICENSE.original</code>에 있습니다.`,
+     `<b class="okmsg">Saved</b> <code>${esc(r.path)}</code><br>The provenance record and check results are in <code>AS_SCREENER.json</code>; the original license is in <code>LICENSE.original</code>.`)
+   +`<div style="margin-top:8px"><button class="sm" id="inst">${L("바로 설치 (Claude Code)","Install now (Claude Code)")}</button> <span class="hint">${L("나중에 '내 스킬'에서 설치·제거할 수도 있습니다.","You can also install or remove it later under 'My skills'.")}</span></div><div class="msg" id="instmsg"></div>`:esc(r.error);
   if(!r.ok){ap.disabled=false;return;}
   loadMine();
   $("#inst").onclick=()=>doInstall(r.name,"claude",false,$("#instmsg"),$("#inst"));};
  const fx=$("#fix"); if(fx) fx.onclick=()=>startRewrite(LAST_SID,"Independent reviewer said these legitimate details were lost; restore them all: "+fid.detail);}
-const STL={installed:"설치됨",none:"설치 안 됨",modified:"변조됨",foreign:"같은 이름 다른 스킬"};
-async function loadMine(){let d;try{d=await api("/api/skills");}catch(e){$("#minecount").textContent="목록을 불러오지 못함";return;}
+const STL=()=>L({installed:"설치됨",none:"설치 안 됨",modified:"변조됨",foreign:"같은 이름 다른 스킬"},
+ {installed:"Installed",none:"Not installed",modified:"Tampered",foreign:"Different skill, same name"});
+async function loadMine(){let d;try{d=await api(q("/api/skills"));}catch(e){$("#minecount").textContent=L("목록을 불러오지 못함","Couldn't load the list");return;}
  if(!d.ok){$("#minecount").textContent=d.error;return;}
- const n=d.skills.length, inst=d.skills.filter(s=>Object.values(s.installs).some(i=>i.state==="installed")).length,
+ const stl=STL(), n=d.skills.length, inst=d.skills.filter(s=>Object.values(s.installs).some(i=>i.state==="installed")).length,
   bad=d.skills.filter(s=>s.integrity!=="ok"||Object.values(s.installs).some(i=>i.state==="modified")).length;
- $("#minecount").textContent=n?`승인 ${n}개 · 설치 ${inst}개${bad?` · 변조 ${bad}개 ⚠`:""}`:"아직 승인된 스킬이 없습니다";
+ $("#minecount").textContent=n?L(`승인 ${n}개 · 설치 ${inst}개${bad?` · 변조 ${bad}개 ⚠`:""}`,`${n} approved · ${inst} installed${bad?` · ${bad} tampered ⚠`:""}`)
+  :L("아직 승인된 스킬이 없습니다","No approved skills yet");
  if(bad) $("#mine").open=true;
- if(!n){$("#minebox").innerHTML=`<div class="hint">검사 → 재작성 → 승인을 마치면 여기에 나타납니다.</div>`;return;}
+ if(!n){$("#minebox").innerHTML=`<div class="hint">${L("검사 → 재작성 → 승인을 마치면 여기에 나타납니다.","Skills appear here after scan → rewrite → approve.")}</div>`;return;}
  const tk=Object.keys(d.targets);
- let h=`<table><thead><tr><th>스킬</th><th>검증</th>${tk.map(t=>`<th title="${esc(d.targets[t].path)}">${esc(d.targets[t].label)}</th>`).join("")}</tr></thead><tbody>`;
+ let h=`<table><thead><tr><th>${L("스킬","Skill")}</th><th>${L("검증","Checks")}</th>${tk.map(t=>`<th title="${esc(d.targets[t].path)}">${esc(d.targets[t].label)}</th>`).join("")}</tr></thead><tbody>`;
  for(const s of d.skills){
-  h+=`<tr><td><div class="t">${esc(s.name)}</div><div class="src">${esc(s.source)}</div><div class="d">승인 ${esc((s.approved_at||"").replace("T"," ").slice(0,16))}${s.license?" · "+esc(s.license):""}</div>
-   ${s.integrity!=="ok"?`<div class="prob">⚠ 승인본이 바뀜 — 설치 불가, 다시 검사·승인 필요<br>${esc(s.problems.slice(0,3).join(" / "))}</div>`:""}</td>
+  h+=`<tr><td><div class="t">${esc(s.name)}</div><div class="src">${esc(s.source)}</div><div class="d">${L("승인 ","Approved ")}${esc((s.approved_at||"").replace("T"," ").slice(0,16))}${s.license?" · "+esc(s.license):""}</div>
+   ${s.integrity!=="ok"?`<div class="prob">⚠ ${L("승인본이 바뀜 — 설치 불가, 다시 검사·승인 필요","The approved copy changed — can't install; scan and approve again")}<br>${esc(s.problems.slice(0,3).join(" / "))}</div>`:""}</td>
    <td>${esc(s.checks||"-")}</td>`;
   for(const t of tk){const i=s.installs[t];let b="";
-   if(s.integrity==="ok"&&i.state==="none") b=`<button class="sm" data-a="install" data-n="${esc(s.name)}" data-t="${t}">설치</button>`;
-   if(s.integrity==="ok"&&i.state==="modified") b=`<button class="sm" data-a="overwrite" data-n="${esc(s.name)}" data-t="${t}">승인본으로 복구</button>`;
-   if(i.state==="installed"||i.state==="modified") b+=`<button class="sm danger" data-a="remove" data-n="${esc(s.name)}" data-t="${t}">제거</button>`;
-   h+=`<td><span class="st ${esc(i.state)}">${esc(STL[i.state]||i.state)}</span>${i.state==="modified"?`<div class="prob">${esc((i.problems||[]).slice(0,3).join(" / "))}</div>`:""}
-    ${i.state==="foreign"?`<div class="d">직접 만든 스킬로 보고 건드리지 않음</div>`:""}<div>${b}</div></td>`;}
+   if(s.integrity==="ok"&&i.state==="none") b=`<button class="sm" data-a="install" data-n="${esc(s.name)}" data-t="${t}">${L("설치","Install")}</button>`;
+   if(s.integrity==="ok"&&i.state==="modified") b=`<button class="sm" data-a="overwrite" data-n="${esc(s.name)}" data-t="${t}">${L("승인본으로 복구","Restore approved copy")}</button>`;
+   if(i.state==="installed"||i.state==="modified") b+=`<button class="sm danger" data-a="remove" data-n="${esc(s.name)}" data-t="${t}">${L("제거","Remove")}</button>`;
+   h+=`<td><span class="st ${esc(i.state)}">${esc(stl[i.state]||i.state)}</span>${i.state==="modified"?`<div class="prob">${esc((i.problems||[]).slice(0,3).join(" / "))}</div>`:""}
+    ${i.state==="foreign"?`<div class="d">${L("직접 만든 스킬로 보고 건드리지 않음","Treated as your own skill and left untouched")}</div>`:""}<div>${b}</div></td>`;}
   h+=`</tr>`;}
  $("#minebox").innerHTML=h+`</tbody></table>`;
  $("#minebox").querySelectorAll("button[data-a]").forEach(b=>b.onclick=()=>{const a=b.dataset.a;
   if(a==="remove") doRemove(b.dataset.n,b.dataset.t,b); else doInstall(b.dataset.n,b.dataset.t,a==="overwrite",$("#minemsg"),b);});}
-async function doInstall(name,target,overwrite,out,btn){btn.disabled=true;out.className="msg";out.textContent="설치 중…";
- const r=await api("/api/install",{method:"POST",body:JSON.stringify({name,target,overwrite})});
- if(r.ok){out.className="msg ok";out.textContent="설치 완료: "+r.path+"\nClaude Code를 새로 열면 이 스킬을 씁니다.";}
- else if(r.code==="exists"){out.className="msg err";out.innerHTML=esc(r.error)+` <button class="sm" id="ow">덮어쓰기</button>`;
+async function doInstall(name,target,overwrite,out,btn){btn.disabled=true;out.className="msg";out.textContent=L("설치 중…","Installing…");
+ const r=await api("/api/install",{method:"POST",body:JSON.stringify({name,target,overwrite,ui:LANG})});
+ if(r.ok){out.className="msg ok";out.textContent=L("설치 완료: ","Installed: ")+r.path+L("\nClaude Code를 새로 열면 이 스킬을 씁니다.","\nOpen a new Claude Code session to use it.");}
+ else if(r.code==="exists"){out.className="msg err";out.innerHTML=esc(r.error)+` <button class="sm" id="ow">${L("덮어쓰기","Overwrite")}</button>`;
   $("#ow").onclick=()=>doInstall(name,target,true,out,$("#ow"));}
  else{out.className="msg err";out.textContent=r.error;btn.disabled=false;}
  loadMine();}
 async function doRemove(name,target,btn){
- if(btn.dataset.sure!=="1"){btn.dataset.sure="1";btn.textContent="정말 제거?";setTimeout(()=>{if(btn.isConnected){btn.dataset.sure="";btn.textContent="제거";}},4000);return;}
- btn.disabled=true;const r=await api("/api/uninstall",{method:"POST",body:JSON.stringify({name,target})});
- const out=$("#minemsg");out.className="msg "+(r.ok?"ok":"err");out.textContent=r.ok?"제거 완료: "+r.path:r.error;loadMine();}
+ if(btn.dataset.sure!=="1"){btn.dataset.sure="1";btn.textContent=L("정말 제거?","Really remove?");setTimeout(()=>{if(btn.isConnected){btn.dataset.sure="";btn.textContent=L("제거","Remove");}},4000);return;}
+ btn.disabled=true;const r=await api("/api/uninstall",{method:"POST",body:JSON.stringify({name,target,ui:LANG})});
+ const out=$("#minemsg");out.className="msg "+(r.ok?"ok":"err");out.textContent=r.ok?L("제거 완료: ","Removed: ")+r.path:r.error;loadMine();}
 $("#go").onclick=async()=>{const input=$("#inp").value;if(!input.trim()){$("#inp").focus();return;}
  const llm=$("#llm").checked;$("#go").disabled=true;
- $("#result").innerHTML=`<div class="verdict fail"><div class="big"><span class="spin"></span>검사 중… ${llm?"(LLM 포함, 최대 1분)":"(몇 초)"}</div></div>`;
- try{render(await api("/api/scan",{method:"POST",body:JSON.stringify({input,llm})}));}
- catch(e){render({state:"fail",title:"서버 응답 없음",detail:String(e)});}
+ $("#result").innerHTML=`<div class="verdict fail"><div class="big"><span class="spin"></span>${L("검사 중… ","Scanning… ")}${llm?L("(LLM 포함, 최대 1분)","(with LLM, up to a minute)"):L("(몇 초)","(a few seconds)")}</div></div>`;
+ try{render(await api("/api/scan",{method:"POST",body:JSON.stringify({input,llm,ui:LANG})}));}
+ catch(e){render({state:"fail",title:L("서버 응답 없음","No response from the server"),detail:String(e)});}
  finally{$("#go").disabled=false;}};
-pre();loadMine();
+applyStatic();pre();loadMine();
 </script></body></html>"""
 
 
@@ -961,14 +1131,14 @@ def main():
         server = QuietServer((HOST, PORT), Handler)
     except OSError:
         print("=" * 60)
-        print(f"이미 다른 AS 스크리너가 실행 중입니다 (포트 {PORT}).")
-        print("작업 표시줄에서 예전 검은 창을 찾아 닫은 뒤 다시 실행하세요.")
-        print("창이 안 보이면 작업 관리자에서 python.exe 를 종료하세요.")
+        print(f"AS Screener is already running (port {PORT}). / 이미 다른 AS 스크리너가 실행 중입니다 (포트 {PORT}).")
+        print("Close the old console window and run it again. / 작업 표시줄에서 예전 검은 창을 찾아 닫은 뒤 다시 실행하세요.")
+        print("If you can't find it, end python.exe in Task Manager. / 창이 안 보이면 작업 관리자에서 python.exe 를 종료하세요.")
         print("=" * 60)
         return
     url = f"http://{HOST}:{PORT}/"
-    print(f"AS 스크리너 v{VERSION} 실행 중: {url}")
-    print("이 창을 닫으면 종료됩니다.")
+    print(f"AS Screener v{VERSION} running at {url}  (AS 스크리너 실행 중)")
+    print("Close this window to stop. / 이 창을 닫으면 종료됩니다.")
     if os.environ.get("AS_SCREENER_NO_BROWSER") != "1":
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:

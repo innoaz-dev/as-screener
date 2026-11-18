@@ -24,7 +24,9 @@ NVIDIA's [SkillSpector](https://github.com/NVIDIA/skillspector) is a good skill 
 5. **Human approval** — nothing is saved until you approve. Source, file fingerprints (SHA-256) and the original license are recorded
 6. **Install & manage** — install/uninstall into Claude Code (`~/.claude/skills`) and Codex (`~/.codex/skills`), with tamper detection
 
-Everything happens on a single paste form: paste a GitHub URL, a folder path or the SKILL.md text and press the button. (The form is in Korean for now; an English UI is on the way.)
+Everything happens on a single paste form: paste a GitHub URL, a folder path or the SKILL.md text and press the button. The form is in English by default; switch to Korean with the **EN / 한국어** toggle in the top-right corner (your choice is remembered, and a Korean browser opens in Korean).
+
+![AS Screener blocking a Korean skill that hides credential exfiltration](docs/screenshot-en.png)
 
 ## Requirements
 
