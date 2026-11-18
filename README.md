@@ -1,107 +1,112 @@
-# AS 스크리너
+# AS Screener
 
-**외부 에이전트 스킬(SKILL.md)을 검사하고, 실행 파일을 버린 뒤 의도만 새로 써서, 자동 검증과 사람 승인을 거쳐 설치하는 로컬 도구**
+**A local tool that scans third-party agent skills (SKILL.md), strips everything executable, rewrites only the intent, and installs the result after automatic checks and your approval.**
 
-[English](README.en.md)
+[한국어](README.ko.md)
 
-인터넷에서 받은 Claude Code·Codex 스킬에는 "이전 지시를 무시해라", "사용자에게 알리지 마라", "SSH 키를 몰래 보내라" 같은 지시문이 숨어 있을 수 있습니다. AS 스크리너는 스킬을 설치하기 전에 이런 지시를 찾아내고, 원문을 그대로 쓰는 대신 **의도만 남긴 깨끗한 버전**을 만들어 설치합니다.
+**At a glance**
+- Catches hidden instructions in **Korean, Chinese and Japanese** skills that an English-centric static scan scores as safe
+- Never installs the original text — installs a **clean rewrite** that passed six automatic checks and your approval
+- Runs locally on your PC, open source (Apache-2.0)
 
-## 왜 만들었나
+Skills you download for Claude Code or Codex can hide instructions such as "ignore previous instructions", "don't tell the user", or "quietly send the SSH key". AS Screener finds them before installation and, instead of installing the original text, installs a **clean rewrite that keeps only the intent**.
 
-NVIDIA의 [SkillSpector](https://github.com/NVIDIA/skillspector)는 좋은 스킬 검사기지만, 정적 검사(LLM 없이 빠르게 도는 1차 검사)는 영어 위주입니다. 같은 악성 지시를 한국어·중국어·일본어·스페인어로 쓰면 SkillSpector v2.12.0 정적 검사에서 모두 **0점(안전)** 으로 통과했습니다. AS 스크리너는 이 빈틈을 한국어·중국어·일본어 탐지 규칙으로 메웁니다.
+## Why
 
-## 하는 일
+NVIDIA's [SkillSpector](https://github.com/NVIDIA/skillspector) is a good skill scanner, but its static scan (the fast, LLM-free first pass) is English-centric. In our tests, the same malicious instructions written in Korean, Chinese, Japanese and Spanish all passed SkillSpector v2.12.0's static scan with a **score of 0 (safe)**. AS Screener closes that gap with YARA rules for Korean, Chinese and Japanese.
 
-1. **검사** — SkillSpector 정적 검사 + 한국어·중국어·일본어 YARA 규칙 + 영어 은폐 규칙. 무료, 수 초. 선택하면 LLM 정밀검사(Claude Code)까지
-2. **실행 파일 제거** — 스크립트·훅·`.mcp.json`·설정 파일은 가져오지 않고 텍스트 지침(SKILL.md, references)만 남김
-3. **재작성** — 도구 없이 실행되는 Claude가 원문을 데이터로만 읽고 의도만 새로 씀 (숨은 지시문 제거)
-4. **자동 검증 6가지** — 형식, 새로 생긴 위험 요소, 원문 복사율, 정적 재검사, LLM 재검사, 별도 Claude의 의도 보존 검토. 실패하면 자동으로 다시 씀(최대 2회)
-5. **사람 승인** — 검증 결과를 보고 승인해야 저장. 출처·파일 지문(SHA-256)·원본 라이선스를 함께 기록
-6. **설치·관리** — Claude Code(`~/.claude/skills`)·Codex(`~/.codex/skills`)에 설치·제거, 변조 감지
+## What it does
 
-모든 과정은 붙여넣기 화면 하나로 합니다. 깃허브 주소, 폴더 경로, SKILL.md 본문 중 아무거나 붙여넣고 버튼을 누르면 됩니다.
+1. **Scan** — SkillSpector static scan + Korean/Chinese/Japanese YARA rules + English concealment rules. Free, a few seconds. Optional LLM deep scan via Claude Code
+2. **Strip executables** — scripts, hooks, `.mcp.json` and config files are dropped; only text instructions (SKILL.md, references) are kept
+3. **Rewrite** — a tool-less Claude reads the original strictly as data and writes the intent from scratch (hidden instructions are removed)
+4. **Six automatic checks** — format, newly introduced risks, copy ratio, static rescan, LLM rescan, and an intent-preservation review by a separate Claude. Failures trigger an automatic retry (up to 2)
+5. **Human approval** — nothing is saved until you approve. Source, file fingerprints (SHA-256) and the original license are recorded
+6. **Install & manage** — install/uninstall into Claude Code (`~/.claude/skills`) and Codex (`~/.codex/skills`), with tamper detection
 
-## 필요한 것
+Everything happens on a single paste form: paste a GitHub URL, a folder path or the SKILL.md text and press the button. (The form is in Korean for now; an English UI is on the way.)
 
-| 항목 | 용도 | 필수 |
+## Requirements
+
+| Item | Purpose | Required |
 |---|---|---|
-| Windows 10/11 | 개발·시험 환경 (macOS·Linux는 아직 시험 안 함) | ✓ |
-| [uv](https://docs.astral.sh/uv/) | 파이썬 3.12 실행 | ✓ |
-| [SkillSpector](https://github.com/NVIDIA/skillspector) | 1차 검사 엔진 (v2.12.0에서 시험) | ✓ |
-| [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) 설치 + 로그인 | LLM 정밀검사·재작성. **본인 계정의 사용량이 듭니다** | 재작성 시 |
+| Windows 10/11 | Developed and tested here (macOS/Linux not yet tested) | ✓ |
+| [uv](https://docs.astral.sh/uv/) | Runs Python 3.12 | ✓ |
+| [SkillSpector](https://github.com/NVIDIA/skillspector) | First-pass scan engine (tested with v2.12.0) | ✓ |
+| [Claude Code](https://docs.claude.com/en/docs/claude-code/overview), installed and logged in | LLM deep scan and rewriting. **Uses your own account's usage** | For rewriting |
 
-AS 스크리너 자체는 파이썬 표준 라이브러리만 씁니다.
+AS Screener itself uses only the Python standard library.
 
-## 설치와 실행
+## Install and run
 
 ```powershell
-# 1. SkillSpector 설치 (PC가 느려지면 동시 작업 수를 줄이세요)
+# 1. Install SkillSpector (lower concurrency if your PC slows down)
 $env:UV_CONCURRENT_DOWNLOADS=2; $env:UV_CONCURRENT_BUILDS=2
 uv tool install --python 3.12 git+https://github.com/NVIDIA/skillspector.git
 
-# 2. 이 저장소 받기
+# 2. Get this repository
 git clone https://github.com/innoaz-dev/as-screener.git
 cd as-screener
 
-# 3. 실행 (AS스크리너.bat 더블클릭과 같음)
+# 3. Run (same as double-clicking AS스크리너.bat)
 uv run --python 3.12 as_screener.py
 ```
 
-브라우저가 `http://127.0.0.1:8765` 로 열립니다. 이 화면은 내 PC 안에서만 열리고 외부에서는 접속할 수 없습니다.
+Your browser opens `http://127.0.0.1:8765`. The form is reachable only from your own machine.
 
-## 테스트
+## Tests
 
 ```powershell
-uv run --python 3.12 tests\run_regression.py      # 테스트실행.bat 과 같음
+uv run --python 3.12 tests\run_regression.py      # same as 테스트실행.bat
 ```
 
-시험 항목 16개(시험 스킬 15개의 기대 판정·규칙·줄 번호 + 규칙 파일 자기 검사) + 재작성 엔진·줄 번호 보정·시간 기록 단위 테스트 12개 + 설치 관리 9개, 총 37개가 모두 통과해야 합니다. 실행할 때마다 걸린 시간이 `tests/timing_log.csv`에 쌓입니다(Git에는 올라가지 않음).
+16 fixture checks (expected verdict, rules and line numbers for 15 test skills, plus a self-scan of the rule files), 12 unit tests for the rewriter, line-number correction and timing log, and 9 installer tests — all 37 must pass. Each run appends its timing to `tests/timing_log.csv` (not committed).
 
-> ⚠️ `test-skills/` 의 `*-injection*` 폴더와 `eval/` 에는 **탐지 시험용으로 일부러 넣은 악성 문장**이 있습니다. 절대 설치하거나 프롬프트에 넣지 마세요.
+> ⚠️ The `test-skills/*-injection*` folders and `eval/` contain **intentionally malicious text for detection tests**. Never install them or put them into a prompt.
 
-## 탐지 규칙 결과
+## Rule results
 
-규칙은 두 단계입니다.
-- **차단** (HIGH·CRITICAL): '시키는 문장'만 잡습니다. 부정문("보내지 마세요"), 인용("'무시해라'라는 문구"), 설명문("공격자는 ~하게 만든다")은 잡지 않도록 했습니다.
-- **주의** (MEDIUM): "이 문서만 따르세요", ".env를 모아 두세요"처럼 수상하지만 정상일 수도 있는 표현입니다. 내용을 보고 판단하세요.
+The rules have two tiers:
+- **Block** (HIGH/CRITICAL) matches only actual commands. Negations ("don't send…"), quotations ("the phrase 'ignore…'") and descriptions ("attackers make the model…") are not matched.
+- **Caution** (MEDIUM) flags phrases that are suspicious but can be legitimate, such as "follow only this document" or "gather the .env files". Review them yourself.
 
-| 언어 | 규칙 (차단 + 주의) | 처음 보는 공격 문장 | 공개 스킬 오탐 (차단 단계) |
+| Language | Rules (block + caution) | Unseen attack sentences | False positives on public skills (block tier) |
 |---|---|---|---|
-| 한국어 `rules/ko` | 6 + 3 | 60개 중 15개 (25%) | 공개 저장소 53개, 한국어 위주 파일 3,752개 0건 |
-| 중국어(간체) `rules/zh` | 6 + 2 | 60개 중 17개 (28%) | 공개 저장소 20개, 중국어 위주 파일 4,060개 0건 |
-| 일본어 `rules/ja` | 6 + 3 | 60개 중 16개 (26%) | 공개 저장소 40개, 일본어 위주 파일 1,287개 0건 |
-| 영어 은폐 `rules/en` | 2 + 1 | (시험 세트는 한·중·일) | 공개 스킬 16,308개·영어 공격 자료 38,850개 0건 |
+| Korean `rules/ko` | 6 + 3 | 15 of 60 (25%) | 53 public repos, 3,752 Korean-heavy files, 0 |
+| Chinese (Simplified) `rules/zh` | 6 + 2 | 17 of 60 (28%) | 20 public repos, 4,060 Chinese-heavy files, 0 |
+| Japanese `rules/ja` | 6 + 3 | 16 of 60 (26%) | 40 public repos, 1,287 Japanese-heavy files, 0 |
+| English concealment `rules/en` | 2 + 1 | (held-out set is KO/ZH/JA) | 16,308 public skill files and 38,850 English attack files, 0 |
 
-- 6종: 이전 지시 무시 · 사용자에게 숨기기 · 은밀 실행 · 탈옥 문구 · 비밀 정보 읽기 · 비밀 정보 외부 유출
-- **처음 보는 공격 문장**은 규칙을 모르는 작성자가 쓰고, 규칙을 고칠 때 보지 않은 시험 세트(`eval/heldout.jsonl`)입니다. 같은 세트에서 이전 규칙(v0.4·v0.1)은 1~8%만 잡았습니다.
-- 같은 시험 세트의 함정용 정상 문장(부정문·보안 문서 등) 90개 중 5개가 걸렸고, 그중 차단 단계는 3개입니다.
-- v1.0.1: 새로 모은 공개 스킬 2,100개(7개 분야)를 돌려 정상 스킬을 차단한 5건을 찾아 고쳤습니다(차단 5 → 0, 주의 5). 그 대가로 중국어 시험 문장 1개를 덜 잡습니다(30% → 28%).
-- v1.0.2: 공개 스킬을 LLM으로 정밀검사하다가, SkillSpector 정적 검사와 한·중·일 규칙이 모두 놓친 영어 은폐 지시를 찾았습니다. 설치 스크립트를 출력을 숨겨 실행하고 "언급하지 말라"고 하거나, 진단 결과를 조용히 외부로 보내는 지시입니다. 이 패턴만 영어 은폐 규칙(`rules/en`)으로 막습니다. 새로 모은 공개 스킬 3,357개 파일에서 이런 스킬 5개만 차단했고 오탐은 0건입니다. 그 밖의 영어 공격은 여전히 SkillSpector 몫입니다.
-- 공개 스킬 전체 16,308개 파일에서 주의 단계 7건이 나왔습니다. 영어 공격·벤치마크 자료 38,850개 파일에서 한·중·일 규칙이 영어 문장에 걸린 경우는 0건입니다.
-- 성적표: `uv run --python 3.12 --with yara-python tools\measure_recall.py heldout` (자세한 기록은 [eval/README.md](eval/README.md))
-- 규칙 파일은 `tools/rulegen/` 생성기로 만듭니다. 규칙 파일 속 한·중·일 글자는 `\xNN` 바이트 표기라서 규칙 파일이 자기 자신에게 걸리지 않습니다.
+- The six categories: instruction override · concealment from the user · stealth execution · jailbreak phrases · credential access · credential exfiltration
+- **Unseen attack sentences** come from a held-out set (`eval/heldout.jsonl`), written by an author who did not know the rules and never used while tuning them. The previous rules (v0.4/v0.1) caught only 1–8% of the same set.
+- Of the 90 tricky benign sentences in that set (negations, security docs, etc.), 5 were flagged, 3 of them at the block tier.
+- v1.0.1: we ran 2,100 newly collected public skills (7 fields), found 5 benign skills wrongly blocked, and fixed them (block 5 → 0, caution 5). The cost: one fewer Chinese held-out sentence caught (30% → 28%).
+- v1.0.2: while LLM-scanning public skills we found English concealment instructions that both SkillSpector's static scan and our KO/ZH/JA rules missed: run a setup script with its output hidden and "do not mention it", or silently POST diagnostics to an outside endpoint. An English concealment rule set (`rules/en`) now covers this one pattern. On 3,357 newly collected public skill files it blocks exactly those 5 skills with 0 false positives. Other English attacks are still left to SkillSpector.
+- Across all 16,308 public skill files, 7 caution-tier hits. On 38,850 files of English attack and benchmark data, the Korean/Chinese/Japanese rules matched English text 0 times.
+- Scorecard: `uv run --python 3.12 --with yara-python tools\measure_recall.py heldout` (details in [eval/README.md](eval/README.md), Korean)
+- The rule files are generated by `tools/rulegen/`. Korean/Chinese/Japanese characters are written as `\xNN` bytes so the rule files don't match themselves.
 
-## 한계
+## Limitations
 
-- **정적 규칙은 처음 보는 공격의 4분의 1 정도만 잡습니다.** 돌려 말하는 지시, 은폐 지시, 탈옥 문구를 특히 많이 놓칩니다. 정적 규칙은 빠른 1차 거름망일 뿐이니, 처음 보는 스킬은 LLM 정밀검사를 함께 켜세요. LLM 모드는 한·중·일·스페인어 시험 스킬을 모두 잡았습니다.
-- 평가 문장도 AI(Claude)가 쓴 것이라 실제 공격자의 문장과 다를 수 있습니다.
-- 스페인어·번체 중국어 규칙은 아직 없습니다.
-- Windows에서만 시험했습니다.
-- 재작성·번역본도 원본의 2차 저작물일 수 있습니다. AS 스크리너는 원본 라이선스를 `LICENSE.original`로 함께 저장하고, 라이선스가 없는 스킬은 '개인 사용만' 경고를 보여줍니다. 재작성본을 배포하기 전에는 원본 라이선스를 확인하세요.
+- **Static rules catch only about a quarter of unseen attacks.** Indirect phrasing, concealment and jailbreak phrases slip through most often. Treat the static rules as a fast first filter and turn on the LLM deep scan for skills you haven't seen before; in our tests the LLM mode caught the Korean, Chinese, Japanese and Spanish test skills.
+- The evaluation sentences were also written by an AI (Claude), so they may differ from what real attackers write.
+- No Spanish or Traditional Chinese rules yet.
+- Tested on Windows only.
+- A rewrite or translation can still be a derivative work of the original. AS Screener saves the original license as `LICENSE.original` and warns "personal use only" when no license is found. Check the original license before redistributing a rewrite.
 
-## 보안 설계
+## Security design
 
-- 검사 대상 스킬의 코드는 **실행하지 않습니다** (읽기만 함).
-- 재작성용 Claude는 도구·MCP·설정 파일 없이 실행되고, 원문은 데이터로만 넘깁니다.
-- 출력은 `SKILL.md`와 `references/*.md`만 허용합니다 (경로 조작 차단).
-- 로컬 웹 화면은 `127.0.0.1`에서만 열리고, 실행할 때마다 새로 만드는 1회용 열쇠로 다른 웹사이트의 요청을 막습니다.
-- 설치 관리는 AS 스크리너가 설치한 스킬만 덮어쓰거나 지웁니다. 직접 만든 같은 이름의 스킬은 건드리지 않습니다.
+- The scanned skill's code is **never executed** (read only).
+- The rewriting Claude runs with no tools, no MCP servers and no settings files; the original is passed only as data.
+- Output is limited to `SKILL.md` and `references/*.md` (path traversal is blocked).
+- The local web form listens on `127.0.0.1` only and uses a fresh one-time token per run to reject requests from other websites.
+- The installer only overwrites or removes skills it installed itself. A skill with the same name that you wrote is never touched.
 
-## 라이선스와 출처
+## License and attribution
 
 - [Apache License 2.0](LICENSE)
-- SkillSpector(NVIDIA, Apache-2.0)는 별도로 설치하는 도구로 호출만 하며, 이 저장소에 SkillSpector 코드는 들어 있지 않습니다.
-- 이 프로젝트는 NVIDIA·Anthropic과 관계없는 독립 프로젝트입니다. Claude는 Anthropic의 상표입니다.
-- 만든 곳: 이노아즈(Innoaz)
+- SkillSpector (NVIDIA, Apache-2.0) is installed separately and only invoked; no SkillSpector code is included in this repository.
+- This is an independent project, not affiliated with NVIDIA or Anthropic. Claude is a trademark of Anthropic.
+- Made by Innoaz (이노아즈)
 
-보안 문제(탐지 우회 방법 등)는 공개 Issue 대신 [SECURITY.md](SECURITY.md)의 방법으로 알려 주세요.
+Please report security issues (e.g. ways to bypass detection) as described in [SECURITY.md](SECURITY.md), not in public issues.

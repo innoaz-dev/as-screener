@@ -1,6 +1,6 @@
 # AS 스크리너 — 저장소 정보
 
-AI 코딩 도구(Claude Code·Codex·Cursor 등)가 이 저장소에서 작업할 때 읽는 저장소 정보. 사람용 소개는 README.md.
+AI 코딩 도구(Claude Code·Codex·Cursor 등)가 이 저장소에서 작업할 때 읽는 저장소 정보. 사람용 소개는 README.md(영어, 기본)와 README.ko.md(한국어).
 
 ## 무엇인가
 외부 에이전트 스킬을 검사(NVIDIA SkillSpector + 한국어·중국어·일본어 YARA 규칙)하고, 실행 파일을 버린 뒤 의도만 우리 말로 재작성해 자동 검증 후 승인하는 로컬 도구. 파이썬 표준 라이브러리만 쓴다.
