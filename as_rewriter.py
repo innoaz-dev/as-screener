@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-AS 스크리너 - 재작성 엔진 v0.1 (2026-11-02)
+AS 스크리너 - 재작성 엔진 v0.2 (2026-11-18, 화면 언어 영어/한국어)
 
 흐름: 원본 가져오기 → 실행 파일 제거(텍스트 지침만 남김) → Claude로 '의도만 뽑아 새로 쓰기'
       → 새 버전 재검사(호출하는 쪽) → 승인 시 approved/ 에 출처 기록과 함께 저장
@@ -27,6 +27,8 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
+from as_i18n import BilingualError, norm, tr
+
 # ── 파일 분류 기준 ────────────────────────────────────────────────────────────
 KEEP_EXT = (".md", ".mdc", ".markdown", ".txt")
 DOC_NAMES = {"readme.md", "readme.txt", "changelog.md", "contributing.md", "code_of_conduct.md",
@@ -42,8 +44,8 @@ MAX_ZIP_BYTES = 60 * 1024 * 1024
 CLAUDE_TIMEOUT = 420
 
 
-class RewriteError(Exception):
-    """사용자에게 그대로 보여줄 한국어 오류."""
+class RewriteError(BilingualError):
+    """사용자에게 그대로 보여줄 오류 (한국어·영어 둘 다 보관, exc.text(lang)으로 꺼냄)."""
 
 
 # ── 1. 원본 가져오기 ──────────────────────────────────────────────────────────
@@ -54,7 +56,8 @@ def fetch_github(url: str, workdir: Path) -> Path:
     """깃허브 주소 → 해당 폴더를 임시 폴더에 풀어 그 경로를 돌려준다 (git 없이 zip으로)."""
     m = _GH.match(url.strip())
     if not m:
-        raise RewriteError("깃허브 저장소나 폴더 주소만 재작성할 수 있습니다 (github.com/사용자/저장소/tree/브랜치/폴더).")
+        raise RewriteError("깃허브 저장소나 폴더 주소만 재작성할 수 있습니다 (github.com/사용자/저장소/tree/브랜치/폴더).",
+                           "Only a GitHub repository or folder URL can be rewritten (github.com/user/repo/tree/branch/folder).")
     owner, repo, branch, sub = m.group(1), m.group(2), m.group(3) or "HEAD", (m.group(4) or "").strip("/")
     zurl = f"https://codeload.github.com/{owner}/{repo}/zip/{'HEAD' if branch == 'HEAD' else 'refs/heads/' + branch}"
     req = urllib.request.Request(zurl, headers={"User-Agent": "AS-Screener"})
@@ -62,9 +65,11 @@ def fetch_github(url: str, workdir: Path) -> Path:
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = resp.read(MAX_ZIP_BYTES + 1)
     except Exception as exc:  # noqa: BLE001
-        raise RewriteError(f"깃허브에서 내려받지 못했습니다 (브랜치 이름 확인: main/master): {exc}") from exc
+        raise RewriteError(f"깃허브에서 내려받지 못했습니다 (브랜치 이름 확인: main/master): {exc}",
+                           f"Could not download from GitHub (check the branch name: main/master): {exc}") from exc
     if len(data) > MAX_ZIP_BYTES:
-        raise RewriteError("저장소가 너무 큽니다. 스킬 폴더 주소로 넣어주세요.")
+        raise RewriteError("저장소가 너무 큽니다. 스킬 폴더 주소로 넣어주세요.",
+                           "The repository is too large. Paste the URL of the skill folder instead.")
     src = extract_zip(data, sub, workdir / "src")
     save_repo_license(data, workdir / "repo_license")
     return src
@@ -100,7 +105,7 @@ def extract_zip(data: bytes, sub: str, out: Path) -> Path:
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         names = zf.namelist()
         if not names:
-            raise RewriteError("빈 저장소입니다.")
+            raise RewriteError("빈 저장소입니다.", "The repository is empty.")
         top = names[0].split("/")[0] + "/"
         prefix = top + (sub + "/" if sub else "")
         count = total = 0
@@ -122,7 +127,8 @@ def extract_zip(data: bytes, sub: str, out: Path) -> Path:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(zf.read(info))
     if not any(out.iterdir()):
-        raise RewriteError(f"저장소 안에서 '{sub}' 폴더를 찾지 못했습니다. 주소를 확인하세요.")
+        raise RewriteError(f"저장소 안에서 '{sub}' 폴더를 찾지 못했습니다. 주소를 확인하세요.",
+                           f"Folder '{sub}' was not found in the repository. Check the URL.")
     return out
 
 
@@ -138,8 +144,9 @@ def find_skill_dirs(root: Path) -> list[str]:
 
 
 # ── 2. 실행 파일 제거 (텍스트 지침만 남김) ────────────────────────────────────
-def classify(root: Path) -> tuple[list[dict], list[dict], str]:
-    """(유지, 제거, 라이선스 첫 줄)"""
+def classify(root: Path, lang: str = "en") -> tuple[list[dict], list[dict], str]:
+    """(유지, 제거, 라이선스 첫 줄). 제거 사유는 화면 언어(lang)로."""
+    why = lambda ko, en: tr(lang, ko, en)  # noqa: E731
     keep, drop, license_line, total = [], [], "", 0
     files = [p for p in sorted(root.rglob("*")) if p.is_file() and ".git" not in p.parts]
     for p in files[:MAX_FILES]:
@@ -150,25 +157,25 @@ def classify(root: Path) -> tuple[list[dict], list[dict], str]:
                 license_line = p.read_text(encoding="utf-8", errors="replace").strip().splitlines()[0][:120]
             except (OSError, IndexError):
                 pass
-            drop.append({"path": rel, "reason": "라이선스 (출처 기록에 남김)"})
+            drop.append({"path": rel, "reason": why("라이선스 (출처 기록에 남김)", "License (kept in the provenance record)")})
             continue
         if name == ".mcp.json" or "hooks" in [x.lower() for x in p.relative_to(root).parts[:-1]]:
-            drop.append({"path": rel, "reason": "훅·MCP 연결 (자동 실행 위험)"})
+            drop.append({"path": rel, "reason": why("훅·MCP 연결 (자동 실행 위험)", "Hook / MCP connection (runs automatically)")})
         elif name.endswith(EXEC_EXT):
-            drop.append({"path": rel, "reason": "실행 파일"})
+            drop.append({"path": rel, "reason": why("실행 파일", "Executable")})
         elif name.endswith(CONFIG_EXT) or name.startswith(".env"):
-            drop.append({"path": rel, "reason": "설정·의존성 파일"})
+            drop.append({"path": rel, "reason": why("설정·의존성 파일", "Config / dependency file")})
         elif name in DOC_NAMES or name.startswith("readme"):
-            drop.append({"path": rel, "reason": "사람용 설명서"})
+            drop.append({"path": rel, "reason": why("사람용 설명서", "Human documentation")})
         elif not name.endswith(KEEP_EXT):
-            drop.append({"path": rel, "reason": "이미지·바이너리 등 기타"})
+            drop.append({"path": rel, "reason": why("이미지·바이너리 등 기타", "Image, binary or other")})
         elif size > MAX_KEEP_FILE or total + size > MAX_KEEP_TOTAL:
-            drop.append({"path": rel, "reason": "너무 큼"})
+            drop.append({"path": rel, "reason": why("너무 큼", "Too large")})
         else:
             total += size
             keep.append({"path": rel, "size": size})
     for p in files[MAX_FILES:]:
-        drop.append({"path": str(p.relative_to(root)).replace("\\", "/"), "reason": "파일 수 한도 초과"})
+        drop.append({"path": str(p.relative_to(root)).replace("\\", "/"), "reason": why("파일 수 한도 초과", "Over the file-count limit")})
     return keep, drop, license_line
 
 
@@ -198,13 +205,7 @@ Output format, exactly:
 === FILE: references/example.md ===
 (content, optional)
 === REPORT ===
-목적: (one line, in Korean)
-유지한 것:
-- (bullets, in Korean)
-뺀 것:
-- (bullets with the reason, in Korean; or "- 없음")
-수동 확인 필요:
-- (bullets, in Korean; or "- 없음")
+{report_format}
 === END ===
 
 {feedback}BEGIN UNTRUSTED SKILL {nonce}
@@ -217,7 +218,17 @@ _SAFE_ENV = ("PATH", "PATHEXT", "HOME", "USER", "USERNAME", "USERPROFILE", "APPD
              "HTTPS_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "LANG", "LC_ALL")
 
 
-def build_prompt(root: Path, keep: list[dict], drop: list[dict], lang: str, feedback: str = "") -> str:
+REPORT_FORMAT = {
+    "ko": ('목적: (one line, in Korean)\n유지한 것:\n- (bullets, in Korean)\n'
+           '뺀 것:\n- (bullets with the reason, in Korean; or "- 없음")\n수동 확인 필요:\n- (bullets, in Korean; or "- 없음")'),
+    "en": ('Purpose: (one line, in English)\nKept:\n- (bullets, in English)\n'
+           'Removed:\n- (bullets with the reason, in English; or "- none")\nManual checks needed:\n- (bullets, in English; or "- none")'),
+}
+
+
+def build_prompt(root: Path, keep: list[dict], drop: list[dict], lang: str, feedback: str = "",
+                 ui: str = "en") -> str:
+    """lang = 새 스킬을 쓸 언어, ui = 재작성 보고(사람이 읽는 요약)를 쓸 화면 언어."""
     nonce = os.urandom(6).hex()
     parts = []
     for f in keep:
@@ -228,6 +239,7 @@ def build_prompt(root: Path, keep: list[dict], drop: list[dict], lang: str, feed
     fb = (f"Automatic checks rejected your previous attempt. Fix these problems this time:\n{feedback}\n\n"
           if feedback else "")
     return PROMPT.format(removed=removed, lang="Korean" if lang == "ko" else "English",
+                         report_format=REPORT_FORMAT[norm(ui)],
                          nonce=nonce, files="\n\n".join(parts), feedback=fb)
 
 
@@ -252,7 +264,8 @@ def run_tree(argv: list[str], timeout: int, env: dict, cwd: str | None = None, d
 def run_claude(prompt: str, system: str = SYSTEM_PROMPT) -> str:
     claude = shutil.which("claude")
     if not claude:
-        raise RewriteError("Claude Code가 설치되어 있지 않아 재작성할 수 없습니다.")
+        raise RewriteError("Claude Code가 설치되어 있지 않아 재작성할 수 없습니다.",
+                           "Claude Code is not installed, so the skill cannot be rewritten.")
     argv = [claude, "-p", "--output-format", "text", "--allowed-tools", "", "--permission-mode", "dontAsk",
             "--strict-mcp-config", "--setting-sources=", "--disable-slash-commands", "--tools", "",
             "--system-prompt", system, "--no-session-persistence"]
@@ -262,15 +275,17 @@ def run_claude(prompt: str, system: str = SYSTEM_PROMPT) -> str:
     try:
         cp = run_tree(argv, CLAUDE_TIMEOUT, env, cwd=cwd, data=prompt.encode("utf-8"))
     except subprocess.TimeoutExpired as exc:
-        raise RewriteError("재작성이 시간 안에 끝나지 않았습니다. 다시 시도하세요.") from exc
+        raise RewriteError("재작성이 시간 안에 끝나지 않았습니다. 다시 시도하세요.",
+                           "The rewrite did not finish in time. Try again.") from exc
     finally:
         shutil.rmtree(cwd, ignore_errors=True)
     out = cp.stdout.decode("utf-8", "replace")
     if cp.returncode != 0 or not out.strip():
         err = (cp.stderr.decode("utf-8", "replace") or out).strip()[-400:]
         if "log" in err.lower() and "in" in err.lower():
-            raise RewriteError("Claude Code 로그인이 필요합니다. 터미널에서 `claude auth login`을 실행하세요.")
-        raise RewriteError(f"Claude 재작성 실패: {err or '응답 없음'}")
+            raise RewriteError("Claude Code 로그인이 필요합니다. 터미널에서 `claude auth login`을 실행하세요.",
+                               "Log in to Claude Code first: run `claude auth login` in a terminal.")
+        raise RewriteError(f"Claude 재작성 실패: {err or '응답 없음'}", f"Claude rewrite failed: {err or 'no response'}")
     return out
 
 
@@ -289,9 +304,11 @@ def parse_output(text: str) -> tuple[dict, str]:
         elif header == "REPORT":
             report = body.strip()
     if "SKILL.md" not in files:
-        raise RewriteError("재작성 결과에 SKILL.md가 없습니다. 다시 시도하세요.")
+        raise RewriteError("재작성 결과에 SKILL.md가 없습니다. 다시 시도하세요.",
+                           "The rewrite has no SKILL.md. Try again.")
     if not files["SKILL.md"].lstrip().startswith("---"):
-        raise RewriteError("재작성된 SKILL.md 형식이 올바르지 않습니다 (머리말 없음). 다시 시도하세요.")
+        raise RewriteError("재작성된 SKILL.md 형식이 올바르지 않습니다 (머리말 없음). 다시 시도하세요.",
+                           "The rewritten SKILL.md is malformed (no frontmatter). Try again.")
     return files, report
 
 
@@ -365,43 +382,46 @@ def _items(text: str) -> tuple[set, set, set]:
     return urls, cmds, sens
 
 
-def check_format(files: dict) -> dict:
+def check_format(files: dict, lang: str = "en") -> dict:
+    t = lambda ko, en: tr(lang, ko, en)  # noqa: E731
     skill = files.get("SKILL.md", "")
     m = re.match(r"^\s*---\s*\n(.*?)\n---", skill, re.S)
     problems = []
     if not m:
-        problems.append("머리말(---) 없음")
+        problems.append(t("머리말(---) 없음", "no frontmatter (---)"))
     else:
         head = m.group(1)
         if not re.search(r"^name:\s*\S", head, re.M):
-            problems.append("name 없음")
+            problems.append(t("name 없음", "no name"))
         d = re.search(r"^description:\s*(.+)", head, re.M)
         if not d:
-            problems.append("description 없음")
+            problems.append(t("description 없음", "no description"))
         elif len(d.group(1)) > 1024:
-            problems.append("description이 너무 김")
+            problems.append(t("description이 너무 김", "description is too long"))
     for ref in set(re.findall(r"references/[A-Za-z0-9._-]+\.md", skill)):
         if ref not in files:
-            problems.append(f"없는 파일을 가리킴: {ref}")
+            problems.append(t(f"없는 파일을 가리킴: {ref}", f"points to a missing file: {ref}"))
     for k, v in files.items():
         if len(v.strip()) < 20:
-            problems.append(f"내용이 거의 없음: {k}")
-    return {"id": "format", "name": "형식", "status": "fail" if problems else "pass",
-            "detail": ", ".join(problems) or "머리말·참고 문서 연결 정상"}
+            problems.append(t(f"내용이 거의 없음: {k}", f"almost empty: {k}"))
+    return {"id": "format", "name": t("형식", "Format"), "status": "fail" if problems else "pass",
+            "detail": ", ".join(problems) or t("머리말·참고 문서 연결 정상", "Frontmatter and reference links are fine")}
 
 
-def check_new_risks(originals: dict, files: dict) -> dict:
+def check_new_risks(originals: dict, files: dict, lang: str = "en") -> dict:
+    t = lambda ko, en: tr(lang, ko, en)  # noqa: E731
     ou, oc, os_ = _items("\n".join(originals.values()))
     nu, nc, ns = _items("\n".join(files.values()))
     added = []
     if nu - ou:
-        added.append("새 주소: " + ", ".join(sorted(nu - ou)[:5]))
+        added.append(t("새 주소: ", "New URLs: ") + ", ".join(sorted(nu - ou)[:5]))
     if nc - oc:
-        added.append("새 명령어: " + ", ".join(sorted(nc - oc)[:5]))
+        added.append(t("새 명령어: ", "New commands: ") + ", ".join(sorted(nc - oc)[:5]))
     if ns - os_:
-        added.append("새 민감 정보 언급: " + ", ".join(sorted(ns - os_)))
-    return {"id": "new_risk", "name": "새로 생긴 위험 요소", "status": "fail" if added else "pass",
-            "detail": " / ".join(added) or "원본에 없던 주소·명령어·민감 정보 언급 없음"}
+        added.append(t("새 민감 정보 언급: ", "New mentions of sensitive data: ") + ", ".join(sorted(ns - os_)))
+    return {"id": "new_risk", "name": t("새로 생긴 위험 요소", "Newly introduced risks"), "status": "fail" if added else "pass",
+            "detail": " / ".join(added) or t("원본에 없던 주소·명령어·민감 정보 언급 없음",
+                                             "No URLs, commands or sensitive-data mentions that weren't in the original")}
 
 
 def _shingles(text: str, n: int = 8) -> set:
@@ -409,15 +429,18 @@ def _shingles(text: str, n: int = 8) -> set:
     return {" ".join(toks[i:i + n]) for i in range(max(0, len(toks) - n + 1))}
 
 
-def check_copy(originals: dict, files: dict) -> dict:
+def check_copy(originals: dict, files: dict, lang: str = "en") -> dict:
+    t = lambda ko, en: tr(lang, ko, en)  # noqa: E731
     orig = _shingles("\n".join(originals.values()))
     new = _shingles("\n".join(files.values()))
     if not new:
-        return {"id": "copy", "name": "원문 복사율", "status": "skip", "detail": "비교할 문장이 너무 짧음"}
+        return {"id": "copy", "name": t("원문 복사율", "Copy ratio"), "status": "skip",
+                "detail": t("비교할 문장이 너무 짧음", "Too little text to compare")}
     ratio = len(new & orig) / len(new)
     status = "fail" if ratio >= 0.6 else "warn" if ratio >= 0.3 else "pass"
-    return {"id": "copy", "name": "원문 복사율", "status": status,
-            "detail": f"원문과 8단어 이상 연속 일치 {ratio * 100:.0f}% (30% 미만이면 통과)"}
+    return {"id": "copy", "name": t("원문 복사율", "Copy ratio"), "status": status,
+            "detail": t(f"원문과 8단어 이상 연속 일치 {ratio * 100:.0f}% (30% 미만이면 통과)",
+                        f"{ratio * 100:.0f}% matches the original in runs of 8+ words (passes under 30%)")}
 
 
 REVIEW_SYSTEM = (
@@ -431,9 +454,9 @@ Removing harmful parts of ORIGINAL (instruction override, hiding things from the
 
 Reply with exactly one JSON object:
 {{"verdict": "ok" | "minor" | "major",
-  "missing_important": ["short Korean phrase", ... max 5],
-  "unsupported_additions": ["short Korean phrase", ... max 5],
-  "summary": "one Korean sentence"}}
+  "missing_important": ["short {ui_lang} phrase", ... max 5],
+  "unsupported_additions": ["short {ui_lang} phrase", ... max 5],
+  "summary": "one {ui_lang} sentence"}}
 
 - "major": the purpose changed, steps essential to doing the job are missing, or NEW adds risky behavior not in ORIGINAL.
 - "minor": small useful details lost or small ungrounded additions.
@@ -449,14 +472,18 @@ END NEW {nonce}
 """
 
 
-def check_fidelity(originals: dict, files: dict) -> dict:
+def check_fidelity(originals: dict, files: dict, lang: str = "en") -> dict:
+    t = lambda ko, en: tr(lang, ko, en)  # noqa: E731
+    name = t("의도 보존 (독립 검토)", "Intent preserved (independent review)")
     nonce = os.urandom(6).hex()
     join = lambda d: "\n\n".join(f"--- file: {k} ---\n{v}" for k, v in d.items())  # noqa: E731
     try:
-        out = run_claude(REVIEW_PROMPT.format(nonce=nonce, original=join(originals), new=join(files)),
+        out = run_claude(REVIEW_PROMPT.format(nonce=nonce, original=join(originals), new=join(files),
+                                              ui_lang=t("Korean", "English")),
                          system=REVIEW_SYSTEM)
     except RewriteError as exc:
-        return {"id": "fidelity", "name": "의도 보존 (독립 검토)", "status": "warn", "detail": f"검토 실행 실패: {exc}"}
+        return {"id": "fidelity", "name": name, "status": "warn",
+                "detail": t(f"검토 실행 실패: {exc.text('ko')}", f"Review could not run: {exc.text('en')}")}
     m = re.search(r"\{.*\}", out, re.S)
     try:
         data = json.loads(m.group(0)) if m else {}
@@ -464,14 +491,14 @@ def check_fidelity(originals: dict, files: dict) -> dict:
         data = {}
     verdict = str(data.get("verdict", "")).lower()
     if verdict not in ("ok", "minor", "major"):
-        return {"id": "fidelity", "name": "의도 보존 (독립 검토)", "status": "warn", "detail": "검토 결과를 읽지 못함"}
+        return {"id": "fidelity", "name": name, "status": "warn", "detail": t("검토 결과를 읽지 못함", "Could not read the review result")}
     parts = [str(data.get("summary", "")).strip()]
     if data.get("missing_important"):
-        parts.append("빠진 것: " + "; ".join(map(str, data["missing_important"][:5])))
+        parts.append(t("빠진 것: ", "Missing: ") + "; ".join(map(str, data["missing_important"][:5])))
     if data.get("unsupported_additions"):
-        parts.append("근거 없는 추가: " + "; ".join(map(str, data["unsupported_additions"][:5])))
+        parts.append(t("근거 없는 추가: ", "Unsupported additions: ") + "; ".join(map(str, data["unsupported_additions"][:5])))
     status = {"ok": "pass", "minor": "warn", "major": "fail"}[verdict]
-    return {"id": "fidelity", "name": "의도 보존 (독립 검토)", "status": status, "detail": " / ".join(p for p in parts if p)}
+    return {"id": "fidelity", "name": name, "status": status, "detail": " / ".join(p for p in parts if p)}
 
 
 def feedback_from(checks: list[dict]) -> str:

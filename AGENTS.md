@@ -9,6 +9,7 @@ AI 코딩 도구(Claude Code·Codex·Cursor 등)가 이 저장소에서 작업�
 - `as_screener.py` — 로컬 웹 폼(127.0.0.1:8765), 검사·판정·재작성 작업 관리
 - `as_rewriter.py` — 재작성 엔진(원본 가져오기, 실행 파일 제거, Claude 재작성, 자동 검증, 승인 저장)
 - `as_installer.py` — 승인 스킬 설치·제거(`~/.claude/skills`, `~/.codex/skills`), 변조 감지(승인본 지문 기준)
+- `as_i18n.py` — 화면 언어 도우미. 화면·메시지는 **영어가 기본, 한국어 선택**(v1.0.3~). 사용자에게 보이는 문구는 쓰는 자리에서 `tr(lang, "한국어", "English")`로 두 언어를 함께 적고, 사용자에게 보여줄 예외는 `BilingualError(ko, en)`(`exc.text(lang)`)로 던진다. 화면 JS는 `L("한국어","English")`. 새 문구를 한 언어로만 추가하지 않는다
 - `rules/` — 우리 YARA 규칙. SkillSpector에 `rules` 폴더를 통째로 넘김(하위 폴더까지 읽음)
   - `rules/ko/ko_agent_skills.yar` — 한국어 (`ko_` 규칙)
   - `rules/zh/zh_agent_skills.yar` — 중국어 간체 (`zh_` 규칙)

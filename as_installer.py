@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-AS 스크리너 - 설치 관리 v0.1 (2026-11-02)
+AS 스크리너 - 설치 관리 v0.2 (2026-11-18, 오류·상태 문구 영어/한국어)
 
 - approved/ 의 승인된 스킬을 Claude Code(기본) 또는 Codex 스킬 폴더에 설치·제거한다.
 - AS 스크리너가 설치한 스킬(AS_SCREENER.json 이 있는 폴더)만 제거·덮어쓰기한다. 사용자가 만든 스킬은 건드리지 않는다.
@@ -19,16 +19,18 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
+from as_i18n import BilingualError, tr
+
 MARKER = "AS_SCREENER.json"
 EXTRA_OK = {MARKER, "LICENSE.original"}          # 지문 대상이 아닌 우리 파일
 _NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
 
 
-class InstallError(Exception):
-    """사용자에게 그대로 보여줄 한국어 오류. code 는 화면이 다음 버튼을 고를 때 쓴다."""
+class InstallError(BilingualError):
+    """사용자에게 그대로 보여줄 오류 (한국어·영어, exc.text(lang)). code 는 화면이 다음 버튼을 고를 때 쓴다."""
 
-    def __init__(self, msg: str, code: str = "error"):
-        super().__init__(msg)
+    def __init__(self, ko: str, code: str = "error", en: str | None = None):
+        super().__init__(ko, en)
         self.code = code
 
 
@@ -45,13 +47,13 @@ TARGETS = {
 
 def target_dir(target: str) -> Path:
     if target not in TARGETS:
-        raise InstallError(f"알 수 없는 설치 위치: {target}")
+        raise InstallError(f"알 수 없는 설치 위치: {target}", en=f"Unknown install target: {target}")
     return TARGETS[target][1]()
 
 
 def _check_name(name: str) -> str:
     if not _NAME.match(name or ""):
-        raise InstallError(f"스킬 이름이 올바르지 않습니다: {name!r}")
+        raise InstallError(f"스킬 이름이 올바르지 않습니다: {name!r}", en=f"Invalid skill name: {name!r}")
     return name
 
 
@@ -75,25 +77,25 @@ def _text_sha(p: Path) -> str | None:
         return None
 
 
-def integrity(folder: Path, rec: dict | None = None) -> tuple[str, list[str]]:
+def integrity(folder: Path, rec: dict | None = None, lang: str = "en") -> tuple[str, list[str]]:
     """('ok'|'modified'|'unknown', 문제 목록). rec 를 주면 그 기록(승인본)을 기준으로 비교."""
     rec = _read_marker(folder) if rec is None else rec
     files = (rec or {}).get("files")
     if not isinstance(files, dict) or not files:
-        return "unknown", ["출처 기록(AS_SCREENER.json)이 없거나 읽을 수 없음"]
+        return "unknown", [tr(lang, "출처 기록(AS_SCREENER.json)이 없거나 읽을 수 없음", "Provenance record (AS_SCREENER.json) is missing or unreadable")]
     problems = []
     for rel, sha in files.items():
         p = folder / rel
         if not p.is_file():
-            problems.append(f"없어짐: {rel}")
+            problems.append(tr(lang, "없어짐: ", "missing: ") + rel)
         elif _text_sha(p) != sha:
-            problems.append(f"바뀜: {rel}")
+            problems.append(tr(lang, "바뀜: ", "changed: ") + rel)
     for p in sorted(folder.rglob("*")):
         if p.is_dir():
             continue
         rel = p.relative_to(folder).as_posix()
         if rel not in files and rel not in EXTRA_OK:
-            problems.append(f"새로 생김: {rel}")
+            problems.append(tr(lang, "새로 생김: ", "new file: ") + rel)
     return ("modified" if problems else "ok"), problems
 
 
@@ -102,11 +104,11 @@ def _approved_dir(base: Path, name: str) -> Path:
     root = (base / "approved").resolve()
     src = (root / name).resolve()
     if src.parent != root or not src.is_dir():
-        raise InstallError(f"승인된 스킬을 찾을 수 없습니다: {name}", "not_found")
+        raise InstallError(f"승인된 스킬을 찾을 수 없습니다: {name}", "not_found", f"Approved skill not found: {name}")
     return src
 
 
-def install_state(base: Path, name: str, target: str) -> dict:
+def install_state(base: Path, name: str, target: str, lang: str = "en") -> dict:
     label = TARGETS[target][0]
     dest = target_dir(target) / name
     if not dest.exists():
@@ -114,11 +116,11 @@ def install_state(base: Path, name: str, target: str) -> dict:
     if _read_marker(dest) is None:
         return {"label": label, "state": "foreign", "path": str(dest)}
     rec = _read_marker(base / "approved" / name) or {}
-    st, probs = integrity(dest, rec)
+    st, probs = integrity(dest, rec, lang)
     return {"label": label, "state": "installed" if st == "ok" else "modified", "problems": probs, "path": str(dest)}
 
 
-def list_skills(base: Path) -> list[dict]:
+def list_skills(base: Path, lang: str = "en") -> list[dict]:
     """승인된 스킬 목록 + 설치 상태 + 변조 여부."""
     approved = base / "approved"
     out = []
@@ -127,13 +129,13 @@ def list_skills(base: Path) -> list[dict]:
     for d in sorted(p for p in approved.iterdir() if p.is_dir() and _NAME.match(p.name)):
         rec = _read_marker(d) or {}
         checks = rec.get("auto_checks") or []
-        st, probs = integrity(d)
+        st, probs = integrity(d, lang=lang)
         out.append({
             "name": d.name, "source": rec.get("source", ""), "approved_at": rec.get("approved_at", ""),
             "license": rec.get("source_license", ""),
             "checks": f"{sum(c.get('status') == 'pass' for c in checks)}/{len(checks)}" if checks else "",
             "integrity": st, "problems": probs,
-            "installs": {t: install_state(base, d.name, t) for t in TARGETS},
+            "installs": {t: install_state(base, d.name, t, lang) for t in TARGETS},
         })
     return out
 
@@ -141,18 +143,24 @@ def list_skills(base: Path) -> list[dict]:
 def install(base: Path, name: str, target: str, overwrite: bool = False) -> Path:
     src = _approved_dir(base, name)
     rec = _read_marker(src)
-    st, probs = integrity(src, rec)
+    st, probs = integrity(src, rec, "ko")
     if st != "ok":
+        en_probs = integrity(src, rec, "en")[1]
         raise InstallError("승인본이 승인 이후 바뀌었습니다. 설치하지 않습니다. 다시 검사·승인하세요: "
-                           + "; ".join(probs[:5]), "tampered")
+                           + "; ".join(probs[:5]), "tampered",
+                           "The approved copy changed after approval, so it was not installed. Scan and approve it again: "
+                           + "; ".join(en_probs[:5]))
     dest_root = target_dir(target)
     dest = dest_root / src.name
     if dest.exists() or dest.is_symlink():
         if _read_marker(dest) is None:
             raise InstallError(f"같은 이름의 스킬이 이미 있습니다 (AS 스크리너가 설치한 것이 아님): {dest}\n"
-                               "직접 만든 스킬은 덮어쓰지 않습니다. 다른 이름으로 다시 승인하세요.", "foreign")
+                               "직접 만든 스킬은 덮어쓰지 않습니다. 다른 이름으로 다시 승인하세요.", "foreign",
+                               f"A skill with the same name already exists (not installed by AS Screener): {dest}\n"
+                               "Skills you wrote yourself are never overwritten. Approve it again under a different name.")
         if not overwrite:
-            raise InstallError("이미 설치되어 있습니다. 승인본으로 바꾸려면 '덮어쓰기'를 누르세요.", "exists")
+            raise InstallError("이미 설치되어 있습니다. 승인본으로 바꾸려면 '덮어쓰기'를 누르세요.", "exists",
+                               "Already installed. Press 'Overwrite' to replace it with the approved copy.")
         _remove_ours(dest)
     dest_root.mkdir(parents=True, exist_ok=True)
     tmp = dest_root / f".{src.name}.as-tmp"
@@ -171,18 +179,21 @@ def uninstall(name: str, target: str) -> Path:
     name = _check_name(name)
     dest = target_dir(target) / name
     if not dest.exists():
-        raise InstallError("설치되어 있지 않습니다.", "not_installed")
+        raise InstallError("설치되어 있지 않습니다.", "not_installed", "Not installed.")
     if _read_marker(dest) is None:
-        raise InstallError("AS 스크리너가 설치한 스킬이 아니라서 지우지 않습니다.", "foreign")
+        raise InstallError("AS 스크리너가 설치한 스킬이 아니라서 지우지 않습니다.", "foreign",
+                           "Not removed: this skill was not installed by AS Screener.")
     _remove_ours(dest)
     return dest
 
 
 def _remove_ours(dest: Path) -> None:
     if dest.is_symlink():
-        raise InstallError("바로가기(링크) 폴더는 지우지 않습니다. 직접 확인하세요.", "unsafe")
+        raise InstallError("바로가기(링크) 폴더는 지우지 않습니다. 직접 확인하세요.", "unsafe",
+                           "Linked (symlink) folders are never removed. Check it yourself.")
     root = dest.parent.resolve()
     real = dest.resolve()
     if real.parent != root or _read_marker(real) is None:
-        raise InstallError("안전 확인 실패: 스킬 폴더 바로 아래가 아니거나 AS 스크리너 표시가 없습니다.", "unsafe")
+        raise InstallError("안전 확인 실패: 스킬 폴더 바로 아래가 아니거나 AS 스크리너 표시가 없습니다.", "unsafe",
+                           "Safety check failed: not directly under the skills folder, or no AS Screener marker.")
     shutil.rmtree(real)
